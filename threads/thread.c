@@ -224,6 +224,11 @@ thread_block (void) {
 	schedule ();
 }
 
+// used for list_sort
+static bool compare_priority(const struct list_elem * a, const struct list_elem *b, void *aux){
+    return (list_entry(a,struct thread, elem)->priority > list_entry(b,struct thread, elem)->priority);
+}
+
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -232,6 +237,8 @@ thread_block (void) {
    be important: if the caller had disabled interrupts itself,
    it may expect that it can atomically unblock a thread and
    update other data. */
+
+
 void
 thread_unblock (struct thread *t) {
 	enum intr_level old_level;
@@ -240,10 +247,14 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	//list_push_back (&ready_list, &t->elem);
+	//list_sort(&ready_list, &compare_priority, NULL);
+	list_insert_ordered(&ready_list, &t->elem, &compare_priority, NULL);
+
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
+
 
 /* Returns the name of the running thread. */
 const char *

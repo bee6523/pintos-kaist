@@ -102,8 +102,9 @@ timer_sleep (int64_t ticks) {
 	while (timer_elapsed (start) < ticks){
 		num_sleeping++;
 		sema_down(&sema_sleep);
-		if(--num_sleeping >0)
-		    sema_up(&sema_sleep);
+	//	if(--num_sleeping >0)
+	//	    sema_up(&sema_sleep);
+		num_sleeping--;
 		thread_yield();
 	}
 }
@@ -137,8 +138,9 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
-	
-	sema_up(&sema_sleep);
+	for(int i=0;i<num_sleeping;i++){
+	    sema_up(&sema_sleep);
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

@@ -184,12 +184,22 @@ lock_init (struct lock *lock) {
    we need to sleep. */
 void
 lock_acquire (struct lock *lock) {
+	int old_priority=thread_current()->priority;
+
 	ASSERT (lock != NULL);
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
-
+	
+	struct thread *holding=lock->holder;
+	printf("%d\n",holding->priority);
+	//if(holding->priority < old_priority){
+	//	printf("\n\n\n@@@@@@@@@@something\n\n\n");
+	//	lock->holder->priority=old_priority;
+	//}
 	sema_down (&lock->semaphore);
 	lock->holder = thread_current ();
+
+	//thread_current()->priority=old_priority;
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
