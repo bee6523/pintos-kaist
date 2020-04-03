@@ -206,6 +206,8 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+	if(t->priority > thread_current()->priority)
+		thread_yield();
 
 	return tid;
 }
@@ -252,6 +254,7 @@ thread_unblock (struct thread *t) {
 	list_insert_ordered(&ready_list, &t->elem, &compare_priority, NULL);
 
 	t->status = THREAD_READY;
+
 	intr_set_level (old_level);
 }
 
@@ -314,7 +317,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered (&ready_list, &curr->elem,&compare_priority,NULL);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -322,7 +325,16 @@ thread_yield (void) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
+	int highest;
+
 	thread_current ()->priority = new_priority;
+
+	if(!list_empty(&ready_list)){
+		highest=list_entry(list_front(&ready_list),struct thread,elem)->priority;
+		if(new_priority<highest)
+			thread_yield();
+	}
+	
 }
 
 /* Returns the current thread's priority. */
@@ -419,6 +431,9 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
+	t->orig_priority=0;
+	t->waiting_lock=NULL;
+	list_init(&t->donation_list);
 	t->magic = THREAD_MAGIC;
 }
 
@@ -545,7 +560,9 @@ do_schedule(int status) {
 			list_entry (list_pop_front (&destruction_req), struct thread, elem);
 		palloc_free_page(victim);
 	}
+	
 	thread_current ()->status = status;
+
 	schedule ();
 }
 
