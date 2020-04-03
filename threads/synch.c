@@ -52,6 +52,8 @@ sema_init (struct semaphore *sema, unsigned value) {
 static bool compare_priority(const struct list_elem * a, const struct list_elem *b, void *aux){
     return (list_entry(a,struct thread, elem)->priority > list_entry(b,struct thread, elem)->priority);
 }
+
+
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
    to become positive and then atomically decrements it.
 
@@ -69,8 +71,8 @@ sema_down (struct semaphore *sema) {
 
 	old_level = intr_disable ();
 	while (sema->value == 0) {
-	//	list_push_back (&sema->waiters, &thread_current ()->elem);
-		list_insert_ordered(&sema->waiters,&thread_current()->elem,&compare_priority,NULL);
+		list_push_back (&sema->waiters, &thread_current ()->elem);
+	//	list_insert_ordered(&sema->waiters,&thread_current()->elem,&compare_priority,NULL);
 		thread_block ();
 	}
 	sema->value--;
@@ -109,15 +111,48 @@ sema_try_down (struct semaphore *sema) {
 void
 sema_up (struct semaphore *sema) {
 	enum intr_level old_level;
-
+	struct list_elem *el;
 	ASSERT (sema != NULL);
 
 	old_level = intr_disable ();
-	if (!list_empty (&sema->waiters))
-		thread_unblock (list_entry (list_pop_front (&sema->waiters),
-					struct thread, elem));
-	sema->value++;
 	
+	sema->value++;
+	if (!list_empty (&sema->waiters)){
+		list_sort(&sema->waiters,&compare_priority,NULL);
+//		el=list_max (&sema->waiters,&compare_priority,NULL);
+//		list_remove(el);
+		el=list_pop_front (&sema->waiters);
+		thread_unblock (list_entry (el,
+					struct thread, elem));
+
+	}
+
+	intr_set_level (old_level);
+	
+	thread_yield();
+}
+
+void
+sema_up_wo_yield (struct semaphore *sema) {
+	enum intr_level old_level;
+	struct list_elem *el;
+	ASSERT (sema != NULL);
+
+	old_level = intr_disable ();
+	
+	sema->value++;
+	if (!list_empty (&sema->waiters)){
+		list_sort(&sema->waiters,&compare_priority,NULL);
+		el=list_pop_front (&sema->waiters);
+		thread_unblock (list_entry (el,
+					struct thread, elem));
+
+	}
+
+	
+	//if(list_entry(el, struct thread, elem)->priority > thread_current()->priority)
+	//	thread_yield();
+
 	intr_set_level (old_level);
 }
 
@@ -202,23 +237,29 @@ lock_acquire (struct lock *lock) {
 				lock->holder->orig_priority=lock->holder->priority;
 				lock->holder->priority=cur_priority;
 
+	//			printf("\nfirst donation happened. orig: %d\n\n", lock->holder->orig_priority);
 				//for nested donation
-				for(struct lock *tmp=lock;tmp->holder->waiting_lock != NULL;tmp=lock->holder->waiting_lock){
-					if(tmp->given_priority < cur_priority)
+				for(struct lock *tmp=lock;tmp != NULL;tmp=tmp->holder->waiting_lock){
+					if(tmp->given_priority < cur_priority){
+						if(tmp->holder->priority < cur_priority)
+							tmp->holder->priority = cur_priority;
 						tmp->given_priority = cur_priority;
+					}
 				}
 				thread_current()->waiting_lock=lock;
 				list_push_back(&lock->holder->donation_list, &lock->elem);
 			}
 		}else if(lock->holder->orig_priority<cur_priority){//if there already was a donation before
+
 			if(lock->holder->priority < cur_priority)
 				lock->holder->priority=cur_priority;
-			for(struct lock *tmp=lock; tmp->holder->waiting_lock != NULL; tmp=lock->holder->waiting_lock){
+			if(!lock->given_priority)
+				list_push_back(&lock->holder->donation_list, &lock->elem);
+			for(struct lock *tmp=lock; tmp != NULL; tmp=tmp->holder->waiting_lock){
 				if(tmp->given_priority < cur_priority)
 					tmp->given_priority=cur_priority;
 			}
 			thread_current()->waiting_lock=lock;
-			list_push_back(&lock->holder->donation_list, &lock->elem);
 		}
 	}
 	sema_down (&lock->semaphore);
@@ -266,16 +307,16 @@ lock_release (struct lock *lock) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	lock->holder = NULL;
-	printf("\ncur->orig_priority: %d",cur->orig_priority);
-	if(cur->orig_priority && cur->orig_priority < lock->given_priority){
 
+	if(cur->orig_priority && cur->orig_priority < lock->given_priority){
+	//	printf("\ncur->orig_priority: %d",cur->orig_priority);
 		list_remove(&lock->elem);
 		if(list_empty(&cur->donation_list)){
 			cur->priority=cur->orig_priority;
 
 			cur->orig_priority=0;
 		}else{
-			printf("\n!! priority recall to %d!!\n", thread_current()->priority);
+	//		printf("\n!! priority recall to %d!!\n", thread_current()->priority);
 			cur->priority=list_entry(list_max(&cur->donation_list,&compare_donated_priority,NULL),struct lock, elem)->given_priority;
 		}
 	}

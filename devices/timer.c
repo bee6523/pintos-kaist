@@ -139,7 +139,7 @@ timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
 	for(int i=0;i<num_sleeping;i++){
-	    sema_up(&sema_sleep);
+	    sema_up_wo_yield(&sema_sleep);
 	}
 }
 
