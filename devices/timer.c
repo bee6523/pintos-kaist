@@ -20,6 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
+struct semaphore sema_sleep;
+static int64_t num_sleeping;
+
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -36,6 +39,8 @@ void
 timer_init (void) {
 	/* 8254 input frequency divided by TIMER_FREQ, rounded to
 	   nearest. */
+	sema_init(&sema_sleep,0);
+	num_sleeping=0;
 	uint16_t count = (1193180 + TIMER_FREQ / 2) / TIMER_FREQ;
 
 	outb (0x43, 0x34);    /* CW: counter 0, LSB then MSB, mode 2, binary. */
@@ -93,8 +98,14 @@ timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+
+	while (timer_elapsed (start) < ticks){
+		num_sleeping++;
+		sema_down(&sema_sleep);
+		if(--num_sleeping >0)
+		    sema_up(&sema_sleep);
+		thread_yield();
+	}
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -126,6 +137,8 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	
+	sema_up(&sema_sleep);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
