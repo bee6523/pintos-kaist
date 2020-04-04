@@ -151,7 +151,9 @@ static void
 update_priority(void){
 	struct thread * cur;
 	int orig_priority;
-	for(struct list_elem *e=list_begin(&entire_list);e!=list_end(&entire_list);e=list_next(e)){
+	struct list_elem *e=list_begin(&entire_list);
+	while(e!=list_end(&entire_list)){
+		struct list_elem *next=list_next(e);
 		cur=list_entry(e,struct thread,ent_e);
 		orig_priority=cur->priority;
 		cur->priority=PRI_MAX-ftoi(div_fi(cur->recent_cpu,4))-2*cur->nice;
@@ -159,9 +161,9 @@ update_priority(void){
 		else if(cur->priority<PRI_MIN) cur->priority=PRI_MIN;
 		
 		if(cur->status == THREAD_READY && orig_priority != cur->priority){
-			list_remove(&cur->elem);
-			list_insert_ordered(&ready_list,&cur->elem,&compare_priority,NULL);
+			list_sort(&ready_list,&compare_priority,NULL);
 		}
+		e=next;
 	}
 }
 
@@ -171,13 +173,21 @@ update_recent_return_ready(void){
 	struct thread *cur;
 	int ready_cnt=0;
 	int coef=mult_fi(load_avg,2);
-
 	coef=div_ff(coef,(add_fi(coef,1)));
-	for(struct list_elem *e=list_begin(&entire_list);e!=list_end(&entire_list);e=list_next(e)){
+
+	struct list_elem *e=list_begin(&entire_list);
+	printf("\nfinding ");
+	while(e!=list_end(&entire_list)){
+		struct list_elem *next=list_next(e);
 		cur=list_entry(e,struct thread,ent_e);
-		cur->recent_cpu=coef*cur->recent_cpu + cur->nice;
-		if(cur->status == THREAD_READY || cur->status == THREAD_RUNNING)
-			ready_cnt++;
+		cur->recent_cpu=add_fi(mult_fi(cur->recent_cpu,coef), cur->nice);
+		
+
+		if(cur->status == THREAD_READY || cur->status == THREAD_RUNNING){
+			if(cur != idle_thread)
+				ready_cnt++;
+		}
+		e=next;
 	}
 	return ready_cnt;
 }
@@ -209,12 +219,12 @@ thread_tick (void) {
 		if(timer_ticks()%TIMER_FREQ==0){
 			int ready_threads=update_recent_return_ready();
 			
-			printf("time:%d ",timer_ticks());		
-			printf("orig:%d ",load_avg);
+			//printf("time:%d ",timer_ticks());		
+			//printf("orig:%d ",load_avg);
 			load_avg=mult_ff(div_fi(itof(59),60),load_avg);
-			printf("first:%d ",load_avg);
+			//printf("first:%d ",load_avg);
 			load_avg+=mult_fi(div_fi(itof(1),60),ready_threads);
-			printf("lavg:%d, %d, %d\n",load_avg,div_fi(itof(1),60),ready_threads);
+			//printf("lavg:%d, %d, %d\n",load_avg,div_fi(itof(1),60),ready_threads);
 		}
 	}
 }
@@ -249,16 +259,13 @@ thread_create (const char *name, int priority,
 	tid_t tid;
 
 	ASSERT (function != NULL);
-
 	/* Allocate thread. */
 	t = palloc_get_page (PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
-
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
-
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	t->tf.rip = (uintptr_t) kernel_thread;
@@ -273,7 +280,6 @@ thread_create (const char *name, int priority,
 	/* Add to run queue. */
 
 	thread_unblock (t);
-
 	if(t->priority > thread_current()->priority)
 		thread_yield();
 
@@ -416,8 +422,7 @@ thread_set_nice (int nice) {
 	struct thread *cur=thread_current();
 	cur->nice= nice;
 	cur->priority=PRI_MAX-ftoi(div_fi(cur->recent_cpu,4))-2*cur->nice;
-	list_remove(&cur->elem);
-	list_insert_ordered(&ready_list,&cur->elem,&compare_priority,NULL);
+	list_sort(&ready_list,&compare_priority,NULL);
 	thread_yield();
 }
 
