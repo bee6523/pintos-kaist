@@ -150,47 +150,39 @@ static bool compare_priority(const struct list_elem * a, const struct list_elem 
 static void
 update_priority(void){
 	struct thread * cur;
-	int orig_priority;
-	struct list_elem *e=list_begin(&entire_list);
-	while(e!=list_end(&entire_list)){
-		struct list_elem *next=list_next(e);
-		cur=list_entry(e,struct thread,ent_e);
-		orig_priority=cur->priority;
-		cur->priority=PRI_MAX-ftoi(div_fi(cur->recent_cpu,4))-2*cur->nice;
-		if(cur->priority>PRI_MAX) cur->priority=PRI_MAX;
-		else if(cur->priority<PRI_MIN) cur->priority=PRI_MIN;
-		
-		if(cur->status == THREAD_READY && orig_priority != cur->priority){
-			list_sort(&ready_list,&compare_priority,NULL);
-		}
-		e=next;
-	}
-}
-
-//search all threads, updates recentCPU, return number of ready state threads
-static int
-update_recent_return_ready(void){
-	struct thread *cur;
 	int ready_cnt=0;
 	int coef=mult_fi(load_avg,2);
 	coef=div_ff(coef,(add_fi(coef,1)));
 
 	struct list_elem *e=list_begin(&entire_list);
-	printf("\nfinding ");
 	while(e!=list_end(&entire_list)){
 		struct list_elem *next=list_next(e);
 		cur=list_entry(e,struct thread,ent_e);
-		cur->recent_cpu=add_fi(mult_fi(cur->recent_cpu,coef), cur->nice);
+		cur->priority=PRI_MAX-ftoi(div_fi(cur->recent_cpu,4))-2*cur->nice;
+		if(cur->priority>PRI_MAX) cur->priority=PRI_MAX;
+		else if(cur->priority<PRI_MIN) cur->priority=PRI_MIN;
 		
+		if(timer_ticks()%TIMER_FREQ==0){
+			cur->recent_cpu=add_fi(mult_ff(cur->recent_cpu,coef), cur->nice);
 
-		if(cur->status == THREAD_READY || cur->status == THREAD_RUNNING){
-			if(cur != idle_thread)
-				ready_cnt++;
+			if(cur->status == THREAD_READY || cur->status == THREAD_RUNNING){
+				if(cur != idle_thread){
+					ready_cnt++;
+				}
+			}
 		}
 		e=next;
 	}
-	return ready_cnt;
+
+	if(timer_ticks()%TIMER_FREQ==0){
+		load_avg=mult_ff(div_fi(itof(59),60),load_avg);
+		load_avg+=mult_fi(div_fi(itof(1),60),ready_cnt);
+		//printf("lavg:%d, %d, %d\n",ftoi(load_avg),div_fi(itof(1),60),ready_cnt);
+	}
+	list_sort(&ready_list,&compare_priority,NULL);
 }
+
+
 
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
@@ -208,25 +200,20 @@ thread_tick (void) {
 	else
 		kernel_ticks++;
 
-	/* Enforce preemption. */
-	if (++thread_ticks >= TIME_SLICE)
-		intr_yield_on_return ();
 	if(thread_mlfqs){
-		t->recent_cpu++;
+		if(t!=idle_thread){
+			t->recent_cpu=add_fi(t->recent_cpu,1);
+			barrier();
+	//		printf("rc:%d\n",ftoi(t->recent_cpu));
+		}
 		if(timer_ticks()%4 ==0){
 			update_priority();
 		}
-		if(timer_ticks()%TIMER_FREQ==0){
-			int ready_threads=update_recent_return_ready();
-			
-			//printf("time:%d ",timer_ticks());		
-			//printf("orig:%d ",load_avg);
-			load_avg=mult_ff(div_fi(itof(59),60),load_avg);
-			//printf("first:%d ",load_avg);
-			load_avg+=mult_fi(div_fi(itof(1),60),ready_threads);
-			//printf("lavg:%d, %d, %d\n",load_avg,div_fi(itof(1),60),ready_threads);
-		}
 	}
+
+	/* Enforce preemption. */
+	if (++thread_ticks >= TIME_SLICE)
+		intr_yield_on_return ();
 }
 
 
@@ -510,10 +497,13 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->waiting_lock=NULL;
 	if(thread_mlfqs){
 		t->priority=0;
-		if(strcmp(name, "main")==0)
+		if(strcmp(name, "main")==0){
 			t->nice=0;
-		else t->nice=thread_current()->nice;
-		t->recent_cpu=0;
+			t->recent_cpu=0;
+		}else{
+		       	t->nice=thread_current()->nice;
+			t->recent_cpu=thread_current()->recent_cpu;
+		}
 		list_push_back(&entire_list,&t->ent_e);
 	}
 	list_init(&t->donation_list);
