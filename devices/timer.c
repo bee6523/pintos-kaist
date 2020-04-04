@@ -20,8 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
-struct semaphore sema_sleep;
-static int64_t num_sleeping;
+//struct semaphore sema_sleep;
+//static int64_t num_sleeping;
+struct list sleep_list;
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -39,8 +40,9 @@ void
 timer_init (void) {
 	/* 8254 input frequency divided by TIMER_FREQ, rounded to
 	   nearest. */
-	sema_init(&sema_sleep,0);
-	num_sleeping=0;
+	//sema_init(&sema_sleep,0);
+	//num_sleeping=0;
+	list_init(&sleep_list);
 	uint16_t count = (1193180 + TIMER_FREQ / 2) / TIMER_FREQ;
 
 	outb (0x43, 0x34);    /* CW: counter 0, LSB then MSB, mode 2, binary. */
@@ -96,17 +98,15 @@ timer_elapsed (int64_t then) {
 void
 timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
+	enum intr_level old_level;
 
 	ASSERT (intr_get_level () == INTR_ON);
-
-	while (timer_elapsed (start) < ticks){
-		num_sleeping++;
-		sema_down(&sema_sleep);
-	//	if(--num_sleeping >0)
-	//	    sema_up(&sema_sleep);
-		num_sleeping--;
-		thread_yield();
-	}
+	
+	old_level=intr_disable();
+	thread_current()->sleep_time = start+ticks;
+	list_push_back(&sleep_list,&thread_current()->elem);
+	thread_block();
+	intr_set_level(old_level);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -136,11 +136,23 @@ timer_print_stats (void) {
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
+	enum intr_level old_level;
 	ticks++;
 	thread_tick ();
-	for(int i=0;i<num_sleeping;i++){
-	    sema_up_wo_yield(&sema_sleep);
+
+	old_level=intr_disable();
+	struct list_elem *e=list_begin(&sleep_list);
+	while(e!=list_end(&sleep_list)){
+		struct list_elem *next=list_next(e);
+		struct thread *cur=list_entry(e,struct thread, elem);
+		if(cur->sleep_time <=ticks){
+			cur->sleep_time=0;
+			list_remove(e);
+			thread_unblock(cur);
+		}
+		e=next;
 	}
+	intr_set_level(old_level);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

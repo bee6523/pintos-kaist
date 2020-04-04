@@ -92,6 +92,8 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 	
+	int sleep_time;
+
 	//for priority scheduler
 	int orig_priority;
 	struct list donation_list;
