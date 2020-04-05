@@ -136,23 +136,19 @@ timer_print_stats (void) {
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
-	enum intr_level old_level;
 	ticks++;
 	thread_tick ();
 
-	old_level=intr_disable();
 	struct list_elem *e=list_begin(&sleep_list);
 	while(e!=list_end(&sleep_list)){
 		struct list_elem *next=list_next(e);
 		struct thread *cur=list_entry(e,struct thread, elem);
 		if(cur->sleep_time <=ticks){
-			cur->sleep_time=0;
 			list_remove(e);
 			thread_unblock(cur);
 		}
 		e=next;
 	}
-	intr_set_level(old_level);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

@@ -133,30 +133,6 @@ sema_up (struct semaphore *sema) {
 	thread_yield();
 }
 
-void
-sema_up_wo_yield (struct semaphore *sema) {
-	enum intr_level old_level;
-	struct list_elem *el;
-	ASSERT (sema != NULL);
-
-	old_level = intr_disable ();
-	
-	sema->value++;
-	if (!list_empty (&sema->waiters)){
-		list_sort(&sema->waiters,&compare_priority,NULL);
-		el=list_pop_front (&sema->waiters);
-		thread_unblock (list_entry (el,
-					struct thread, elem));
-
-	}
-
-	
-	//if(list_entry(el, struct thread, elem)->priority > thread_current()->priority)
-	//	thread_yield();
-
-	intr_set_level (old_level);
-}
-
 static void sema_test_helper (void *sema_);
 
 /* Self-test for semaphores that makes control "ping-pong"
