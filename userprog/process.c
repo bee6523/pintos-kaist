@@ -23,7 +23,7 @@
 #endif
 
 static void process_cleanup (void);
-static bool load (const char *file_name, struct intr_frame *if_);
+static bool load (char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
@@ -164,17 +164,6 @@ int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
-	char *args[5];
-	int argcnt;
-	char * tokenizer;
-
-	
-	args[0]=strtok_r(file_name," ",&tokenizer);
-	for(argcnt=1;argcnt<5;argcnt++){
-		args[argcnt]=strtok_r(NULL," ",&tokenizer);
-		if(args[argcnt]==NULL)
-			break;
-	}
 
 
 	/* We cannot use the intr_frame in the thread structure.
@@ -193,20 +182,12 @@ process_exec (void *f_name) {
 	/* And then load the binary */
 	success = load (file_name, &_if);
 
-	_if.R.rsi=(uint64_t)args[0];
-	_if.R.rdi=argcnt-1;
-	_if.R.rdx=(uint64_t)args[1];
-	_if.R.rcx=(uint64_t)args[2];
-	_if.R.r8=(uint64_t)args[3];
-	_if.R.r9=(uint64_t)args[4];
-
 
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
 
-	hex_dump(0,&_if,sizeof(struct gp_registers),false);
 	/* Start switched process. */
 	do_iret (&_if);
 	NOT_REACHED ();
@@ -343,18 +324,58 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
 		bool writable);
 
+//push arguments into rsp in _f except argv[0].
+static int push_args_to_stack(char **tokenizer, struct intr_frame * _f){
+	struct thread *t=thread_current();
+	int arglen;
+	int argcnt;
+	uint64_t argvptr=0; //for pushing address of each string
+	
+	ASSERT(tokenizer != NULL);
+	char *arg=strtok_r(NULL," ",tokenizer);
+
+	if(arg==NULL){
+		//word_align, push argv[argc] null pointer
+		if((_f->rsp & 7) != 0)
+			_f->rsp = _f->rsp & ~(uint64_t)(7); //word aligning
+		_f->rsp-=8;	//argv[argc] part
+		return 0;
+	}else{
+		printf("recursive in with %s\n", arg);
+		//push string
+		arglen=strnlen(arg,PGSIZE);
+		_f->rsp-=arglen+1;
+		argvptr=_f->rsp;
+		strlcpy((char *)(pml4_get_page(t->pml4,(void *)_f->rsp)),arg,arglen+1);
+
+		//recursive call
+		argcnt = push_args_to_stack(tokenizer,_f);
+
+		//pushing address of string
+		_f->rsp -= 8;
+		*(uint64_t *)(pml4_get_page(t->pml4,(void *)_f->rsp))=argvptr;
+		
+		return argcnt+1;
+	}
+}
+
 /* Loads an ELF executable from FILE_NAME into the current thread.
  * Stores the executable's entry point into *RIP
  * and its initial stack pointer into *RSP.
  * Returns true if successful, false otherwise. */
 static bool
-load (const char *file_name, struct intr_frame *if_) {
+load (char *file_name, struct intr_frame *if_) {
 	struct thread *t = thread_current ();
 	struct ELF ehdr;
 	struct file *file = NULL;
 	off_t file_ofs;
 	bool success = false;
+	uint64_t argptr;
 	int i;
+	char *argv;
+	int argvlen;
+	int argcnt;
+	char *tokenizer;
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
@@ -364,7 +385,8 @@ load (const char *file_name, struct intr_frame *if_) {
 	
 
 	/* Open executable file. */
-	file = filesys_open (file_name);
+	argv=strtok_r(file_name," ",&tokenizer);
+	file = filesys_open (argv);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
@@ -443,8 +465,28 @@ load (const char *file_name, struct intr_frame *if_) {
 	
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
-	printf("success\n");
+
+	//get length of argv[0] to calcualte rsp address
+	argvlen=strnlen(argv,PGSIZE);
+	if_->rsp-=argvlen+1;
+	argptr=if_->rsp;
+
+	//push string into stack, and call recursive function p_a_t_s to handle other arguments
+	strlcpy((pml4_get_page(t->pml4,(void *)if_->rsp)),argv,argvlen+1);
+	argcnt=push_args_to_stack(&tokenizer,if_)+1; //+1 is for argv[0]
+	if_->rsp-=8;
+	
+	//push address of argv[0] into stack
+	*(uint64_t *)(pml4_get_page(t->pml4,(void *)if_->rsp)) = argptr;
+
+	if_->R.rdi=argcnt;
+	if_->R.rsi=if_->rsp;
+	if_->rsp -=8;  //return address
+
 	success = true;
+
+
+	hex_dump(if_->rsp,(void *)(pml4_get_page(t->pml4,(void *)if_->rsp)),256,false);
 
 done:
 	/* We arrive here whether the load is successful or not. */
