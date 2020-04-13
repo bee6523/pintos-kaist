@@ -65,7 +65,7 @@ initd (void *f_name) {
 #endif
 
 	process_init ();
-
+	
 	if (process_exec (f_name) < 0)
 		PANIC("Fail to launch initd\n");
 	NOT_REACHED ();
@@ -164,6 +164,18 @@ int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
+	char *args[5];
+	int argcnt;
+	char * tokenizer;
+
+	
+	args[0]=strtok_r(file_name," ",&tokenizer);
+	for(argcnt=1;argcnt<5;argcnt++){
+		args[argcnt]=strtok_r(NULL," ",&tokenizer);
+		if(args[argcnt]==NULL)
+			break;
+	}
+
 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -173,17 +185,28 @@ process_exec (void *f_name) {
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+
 	/* We first kill the current context */
 	process_cleanup ();
+	
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
+
+	_if.R.rsi=(uint64_t)args[0];
+	_if.R.rdi=argcnt-1;
+	_if.R.rdx=(uint64_t)args[1];
+	_if.R.rcx=(uint64_t)args[2];
+	_if.R.r8=(uint64_t)args[3];
+	_if.R.r9=(uint64_t)args[4];
+
 
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
 
+	hex_dump(0,&_if,sizeof(struct gp_registers),false);
 	/* Start switched process. */
 	do_iret (&_if);
 	NOT_REACHED ();
@@ -204,6 +227,10 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	int i=0;
+	while(1){
+		i+=1;
+	}
 	return -1;
 }
 
@@ -334,6 +361,7 @@ load (const char *file_name, struct intr_frame *if_) {
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate (thread_current ());
+	
 
 	/* Open executable file. */
 	file = filesys_open (file_name);
@@ -341,7 +369,6 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -413,10 +440,10 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
-
+	
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
-
+	printf("success\n");
 	success = true;
 
 done:
