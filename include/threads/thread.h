@@ -113,6 +113,7 @@ struct thread {
 	struct list child_list;			//list of child. contains address to child thread
 	struct list fd_list;			//list of fds. not yet implemented.
 	int num_fd;
+	struct file *exec_file;
 	/* for USERPROG management  */
 
 	

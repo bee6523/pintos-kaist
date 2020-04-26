@@ -35,6 +35,12 @@ void syscall_handler (struct intr_frame *);
 
 static struct semaphore file_access;
 
+void s_file_close(struct file *file){		//synchronized file closing provided for process_exit()
+	sema_down(&file_access);
+	file_close(file);
+	sema_up(&file_access);
+}
+static void validateBuffer(uint64_t uaddr, uint64_t size);
 static void validateAddress(uint64_t uaddr);
 static int allocate_fd(void);
 static struct fd_cont *allocate_fd_cont(void);
@@ -149,8 +155,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			sema_up(&file_access);
 			break;
 		case SYS_READ:
-			validateAddress(f->R.rsi);
-			validateAddress(f->R.rsi+8*f->R.rdx);
+			validateBuffer(f->R.rsi,f->R.rdx);
 			if(f->R.rdi==0){
 				for(int i=0;i<f->R.rdx;i++){
 					*((char *)(f->R.rsi)+i)=input_getc();
@@ -168,8 +173,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			}
 			break;
 		case SYS_WRITE:
-			validateAddress(f->R.rsi);
-			validateAddress(f->R.rsi+8*f->R.rdx);
+			validateBuffer(f->R.rsi,f->R.rdx);
 			if(f->R.rdi==1){
 				putbuf(f->R.rsi,f->R.rdx);
 			}else{
@@ -216,9 +220,18 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	}
 //	do_iret(f);
 }
+
+static void validateBuffer(uint64_t uaddr, uint64_t size){
+	uint64_t i=0;
+	//hex_dump(uaddr,(void *)(pml4_get_page(thread_current()->pml4,(void *)uaddr)),256,false);
+	for(i=0;i<size;i++){
+		validateAddress(uaddr+i);
+	}
+
+}
 static void validateAddress(uint64_t uaddr){
 	struct thread *t=thread_current();
-	if(uaddr==0 || is_kernel_vaddr(uaddr) || pml4e_walk(t->pml4,uaddr,0)==NULL)
+	if(uaddr==0 ||is_kernel_vaddr(uaddr) || pml4e_walk(t->pml4,uaddr,0)==NULL)
 	{
 		thread_exit();
 	}

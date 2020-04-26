@@ -7,6 +7,7 @@
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -148,10 +149,27 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
+	tid_t tid;
 	struct thread *cur=thread_current();
+	struct child_pipe *newpipe=allocate_pipe();	//make new child_pipe element, init,
+	sema_init(&newpipe->sema,0);			
+	newpipe->exit_status=-1;
+	newpipe->tid=0;
+	list_push_back(&cur->child_list,&newpipe->elem);
+
 	cur->parent_if=if_;
-	return thread_create (name,
+	tid = thread_create (name,
 			PRI_DEFAULT, __do_fork, thread_current ());
+
+	sema_down(&newpipe->sema);
+	if(newpipe->tid==0){
+		list_remove(&newpipe->elem);
+		free_pipe(newpipe);
+		return -1;
+	}else{
+		return tid;
+	}
+
 }
 
 #ifndef VM
@@ -232,19 +250,43 @@ __do_fork (void *aux) {
 
 	if_.R.rax=0;		//return value of child should be 0
 	
-	struct child_pipe *newpipe=allocate_pipe();	//make new child_pipe element, init,
-	sema_init(&newpipe->sema,0);			
-	newpipe->exit_status=-1;
-	newpipe->tid=current->tid;
-	list_push_back(&parent->child_list,&newpipe->elem);
-	current->parent_pipe = &newpipe->elem;		//then add it to parent
-
+	struct child_pipe *pipe=list_entry(list_back(&parent->child_list),struct child_pipe,elem);
+	ASSERT(pipe->tid==0);
+	
 	process_init ();
+	
+	if(!list_empty(&parent->fd_list)){
+		struct list_elem *pfd_elem=list_front(&parent->fd_list);
+		struct fd_cont *new_fd, *parent_fd;
+		do{
+			parent_fd = list_entry(pfd_elem,struct fd_cont,elem);
+			new_fd=(struct fd_cont *)malloc(sizeof(struct fd_cont));
+			if(new_fd==NULL){
+				while(!list_empty(&current->fd_list)){
+					new_fd=list_entry(list_pop_front(&current->fd_list),struct fd_cont,elem);
+					file_close(new_fd->file);
+					free(new_fd);
+				}
+				goto error;
+			}
+			new_fd->fd=parent_fd->fd;
+			new_fd->file = file_duplicate(parent_fd->file);
+			list_push_back(&current->fd_list,&new_fd->elem);
+			pfd_elem=list_next(pfd_elem);	
+		}while(pfd_elem!=list_end(&parent->fd_list));
+	}
+	current->num_fd=parent->num_fd;
+	
 
+	pipe->tid=current->tid;
+	current->parent_pipe=&pipe->elem;
+
+	sema_up(&pipe->sema);
 	/* Finally, switch to the newly created process. */
 	if (succ)
 		do_iret (&if_);
 error:
+	sema_up(&pipe->sema);
 	thread_exit ();
 }
 
@@ -320,6 +362,22 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
+	if(list_begin(&curr->fd_list) != NULL){
+		while(!list_empty(&curr->fd_list)){
+			struct fd_cont *cont=list_entry(list_pop_front(&curr->fd_list), struct fd_cont,elem);
+			file_close(cont->file);
+			free(cont);
+		}
+	}
+	if(list_begin(&curr->child_list) != NULL){
+		while(!list_empty(&curr->child_list)){
+			struct child_pipe *pipe=list_entry(list_pop_front(&curr->child_list),struct child_pipe,elem);
+			free(pipe);
+		}
+	}
+	if(curr->exec_file != NULL){
+		file_close(curr->exec_file);
+	}
 	if(curr->parent_pipe != NULL){
 		struct child_pipe *pipe=list_entry(curr->parent_pipe,struct child_pipe, elem);
 		sema_up(&pipe->sema);
@@ -593,7 +651,12 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	if(success){
+		t->exec_file = file;
+		file_deny_write(file);
+	}else{
+		file_close (file);
+	}
 	return success;
 }
 
