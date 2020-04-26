@@ -10,8 +10,10 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "userprog/process.h"
 #include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "lib/string.h"
 #include "intrinsic.h"
 
@@ -34,6 +36,9 @@ void syscall_handler (struct intr_frame *);
 static struct semaphore file_access;
 
 static void validateAddress(uint64_t uaddr);
+static int allocate_fd(void);
+static struct fd_cont *allocate_fd_cont(void);
+static void free_fd_cont(struct fd_cont *cont);
 
 void
 syscall_init (void) {
@@ -54,6 +59,9 @@ void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
 //	printf ("system call %d!\n", f->R.rax);
+	struct thread *cur=thread_current();
+	struct fd_cont *container;
+	struct file * file;
 	uint64_t callee_reg[6];
 	uintptr_t callee_rsp;
 	uint64_t ret;
@@ -62,13 +70,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			power_off();
 			break;
 		case SYS_EXIT:
-			list_entry(thread_current()->parent_pipe,struct child_pipe, elem)->exit_status=f->R.rdi;
+			list_entry(cur->parent_pipe,struct child_pipe, elem)->exit_status=f->R.rdi;
 			
 			thread_exit();
 			break;
 		case SYS_FORK:
 			validateAddress(f->R.rdi);
-			callee_reg[0]=f->R.rbx;
+			callee_reg[0]=f->R.rbx;		//save callee saved registers
 			callee_reg[1]=f->R.rbp;
 			callee_reg[2]=f->R.r12;
 			callee_reg[3]=f->R.r13;
@@ -79,7 +87,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			ret=process_fork(f->R.rdi,f);
 			
 			f->R.rax=ret;
-			f->rsp=callee_rsp;
+			f->rsp=callee_rsp;		//restore callee saved registers
 			f->R.rbx=callee_reg[0];
 			f->R.rbp=callee_reg[1];
 			f->R.r12=callee_reg[2];
@@ -89,7 +97,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_EXEC:
 			validateAddress(f->R.rdi);
-			char *fn_copy = palloc_get_page (PAL_USER);
+			char *fn_copy = palloc_get_page (PAL_USER);	//freeing fn_copy is in process_exec
 			if (fn_copy == NULL)
 				return TID_ERROR;
 			strlcpy (fn_copy, f->R.rdi, PGSIZE);
@@ -114,23 +122,114 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			f->R.rax = filesys_remove(f->R.rdi);
 			sema_up(&file_access);
 			break;
+		case SYS_OPEN:
+			validateAddress(f->R.rdi);
+			sema_down(&file_access);
+			file = filesys_open(f->R.rdi);
+			sema_up(&file_access);
+			if(file==NULL){
+				f->R.rax=-1;
+				break;
+			}else{
+				container = allocate_fd_cont();
+				container->fd = allocate_fd();
+				container->file=file;
+				list_push_back(&cur->fd_list,&container->elem);
+				f->R.rax=container->fd;
+			}
+			break;
+		case SYS_FILESIZE:
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=0;
+				break;
+			}
+			sema_down(&file_access);
+			f->R.rax= file_length(container->file);
+			sema_up(&file_access);
+			break;
+		case SYS_READ:
+			validateAddress(f->R.rsi);
+			validateAddress(f->R.rsi+8*f->R.rdx);
+			if(f->R.rdi==0){
+				for(int i=0;i<f->R.rdx;i++){
+					*((char *)(f->R.rsi)+i)=input_getc();
+				}
+				f->R.rax=f->R.rdx;
+			}else{
+				container=get_cont_by_fd(cur,f->R.rdi);
+				if(container==NULL){
+					f->R.rax=-1;
+					break;
+				}
+				sema_down(&file_access);
+				f->R.rax = file_read(container->file, f->R.rsi, f->R.rdx);
+				sema_up(&file_access);
+			}
+			break;
 		case SYS_WRITE:
+			validateAddress(f->R.rsi);
+			validateAddress(f->R.rsi+8*f->R.rdx);
 			if(f->R.rdi==1){
 				putbuf(f->R.rsi,f->R.rdx);
 			}else{
-				thread_exit();
+				container=get_cont_by_fd(cur,f->R.rdi);
+				if(container==NULL){
+					f->R.rax=-1;
+					break;
+				}
+				sema_down(&file_access);
+				f->R.rax = file_write(container->file, f->R.rsi,f->R.rdx);
+				sema_up(&file_access);
 			}
+			break;
+		case SYS_SEEK:
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL)
+				break;
+			sema_down(&file_access);
+			file_seek(container->file,f->R.rsi);
+			sema_up(&file_access);
+			break;
+		case SYS_TELL:
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=-1;
+				break;
+			}
+			sema_down(&file_access);
+			f->R.rax = file_tell(container->file);
+			sema_up(&file_access);
+			break;
+		case SYS_CLOSE:
+			container = get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL)
+				break;
+			sema_down(&file_access);
+			file_close(container->file);
+			sema_up(&file_access);
+			list_remove(&container->elem);
+			free_fd_cont(container);
 			break;
 		default:
 			thread_exit();
 	}
-	do_iret(f);
+//	do_iret(f);
 }
 static void validateAddress(uint64_t uaddr){
 	struct thread *t=thread_current();
-	if(uaddr==0 || is_kernel_vaddr(uaddr) || pml4_get_page(t->pml4,uaddr)==NULL)
+	if(uaddr==0 || is_kernel_vaddr(uaddr) || pml4e_walk(t->pml4,uaddr,0)==NULL)
 	{
 		thread_exit();
 	}
 }
-
+static int allocate_fd(void){
+	struct thread *t=thread_current();
+	return t->num_fd++;
+}
+static struct fd_cont *allocate_fd_cont(void){
+	return (struct fd_cont *)malloc(sizeof(struct fd_cont));
+}
+static void free_fd_cont(struct fd_cont *cont){
+	free(cont);
+}

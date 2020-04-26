@@ -35,6 +35,11 @@ struct child_pipe {			/* used for fork and wait. */
 	struct semaphore sema;		/* when fork, parent allocate memory, initialize, then  */
 	struct list_elem elem;		/* give address of elem to child's parent_pipe. */
 };
+struct fd_cont {
+	int fd;
+	struct file * file;
+	struct list_elem elem;
+};
 
 /* A kernel thread or user process.
  *

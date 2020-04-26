@@ -62,12 +62,36 @@ static struct child_pipe *allocate_pipe(void){
 static void free_pipe(struct child_pipe * child){
 	return free(child);
 }
+struct fd_cont *get_cont_by_fd(struct thread *t,int fd){
+	struct thread *cur=t;
+	struct list_elem *p;
+	struct fd_cont *cont;
+	if(list_begin(&cur->fd_list)==NULL){
+		return NULL;
+	}
+	if(list_empty(&cur->fd_list)){
+		return NULL;
+	}
+	p=list_front(&cur->fd_list);
+	while(p !=list_end(&cur->fd_list)){
+		cont=list_entry(p,struct fd_cont,elem);
+		if(cont->fd==fd){
+			return cont;
+		}
+		p=list_next(p);
+	}
+	cont=list_entry(p, struct fd_cont, elem);
+	if(cont->fd==fd){
+		return cont;
+	}
+	return NULL;
+}
 
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
 	struct thread *current = thread_current ();
-	current->num_fd=0;
+	current->num_fd=2;
 	list_init(&current->child_list);
 	list_init(&current->fd_list);
 }
