@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -27,6 +28,13 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+struct child_pipe {			/* used for fork and wait. */
+	tid_t tid;
+	int exit_status;		/* when process exit, it sets exit status and perform sema_up */
+	struct semaphore sema;		/* when fork, parent allocate memory, initialize, then  */
+	struct list_elem elem;		/* give address of elem to child's parent_pipe. */
+};
 
 /* A kernel thread or user process.
  *
@@ -91,6 +99,17 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
+
+	/* for USERPROG management  */
+	int exit_status;			//exit status(for syscall exit)
+	struct intr_frame * parent_if;		//if of parent process(for syscall fork)
+
+	struct list_elem *parent_pipe;		//used for sending exit status and give signal to parent.
+	struct list child_list;			//list of child. contains address to child thread
+	struct list fd_list;			//list of fds. not yet implemented.
+	int num_fd;
+	/* for USERPROG management  */
+
 	
 	int sleep_time;
 
