@@ -63,9 +63,9 @@ static struct child_pipe *allocate_pipe(void){
 static void free_pipe(struct child_pipe * child){
 	return free(child);
 }
-struct fd_cont *get_cont_by_fd(struct thread *t,int fd){
+struct fd_cont *get_cont_by_fd(struct thread *t,int fd){//get fd_cont with fd from target thread.
 	struct thread *cur=t;
-	struct list_elem *p;
+	struct list_elem *p,*fdp;
 	struct fd_cont *cont;
 	if(list_begin(&cur->fd_list)==NULL){
 		return NULL;
@@ -73,17 +73,17 @@ struct fd_cont *get_cont_by_fd(struct thread *t,int fd){
 	if(list_empty(&cur->fd_list)){
 		return NULL;
 	}
-	p=list_front(&cur->fd_list);
+	p=list_front(&cur->fd_list);			//traverse thread's fd_list
 	while(p !=list_end(&cur->fd_list)){
 		cont=list_entry(p,struct fd_cont,elem);
-		if(cont->fd==fd){
-			return cont;
+		fdp=list_front(&cont->fdl);
+		while(fdp != list_end(&cont->fdl)){
+			if(list_entry(fdp,struct fd_list, elem)->fd==fd){
+				return cont;
+			}
+			fdp=list_next(fdp);
 		}
 		p=list_next(p);
-	}
-	cont=list_entry(p, struct fd_cont, elem);
-	if(cont->fd==fd){
-		return cont;
 	}
 	return NULL;
 }
@@ -95,6 +95,7 @@ process_init (void) {
 	current->num_fd=2;
 	list_init(&current->child_list);
 	list_init(&current->fd_list);
+	
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -139,6 +140,38 @@ initd (void *f_name) {
 	thread_current()->parent_pipe = &init_process.elem;
 	process_init ();
 	
+	//allocate fd 0, 1 to STDIN, STDOUT
+	struct fd_cont *cont=(struct fd_cont *)malloc(sizeof(struct fd_cont));
+	if(cont==NULL) PANIC("Fail to launch initd\n");
+	struct fd_list *fdl=(struct fd_list *)malloc(sizeof(struct fd_list));
+	if(fdl==NULL){
+		free(cont);
+	       	PANIC("Fail to launch initd\n");
+	}
+	list_init(&cont->fdl);			//allocate STDIN
+	fdl->fd=0;
+	list_push_back(&cont->fdl,&fdl->elem);
+	cont->file=NULL;
+	cont->std=false;
+	list_push_back(&thread_current()->fd_list,&cont->elem);
+	
+	cont=(struct fd_cont *)malloc(sizeof(struct fd_cont));
+	fdl=(struct fd_list *)malloc(sizeof(struct fd_list));
+	if(cont==NULL || fdl==NULL){
+		if(cont != NULL) free(cont);
+		if(fdl != NULL) free(fdl);
+		cont=list_entry(list_pop_front(&thread_current()->fd_list),struct fd_cont,elem);
+		fdl=list_entry(list_pop_front(&cont->fdl),struct fd_list,elem);
+		free(fdl);
+		free(cont);
+	}
+	list_init(&cont->fdl);			//allocate STDOUT
+	fdl->fd=1;
+	list_push_back(&cont->fdl,&fdl->elem);
+	cont->file==NULL;
+	cont->std=true;
+	list_push_back(&thread_current()->fd_list,&cont->elem);
+
 	if (process_exec (f_name) < 0)
 		PANIC("Fail to launch initd\n");
 	NOT_REACHED ();
@@ -255,22 +288,37 @@ __do_fork (void *aux) {
 	
 	process_init ();
 	
+	struct fd_cont *new_fd, *parent_fd;
 	if(!list_empty(&parent->fd_list)){
 		struct list_elem *pfd_elem=list_front(&parent->fd_list);
-		struct fd_cont *new_fd, *parent_fd;
 		do{
 			parent_fd = list_entry(pfd_elem,struct fd_cont,elem);
 			new_fd=(struct fd_cont *)malloc(sizeof(struct fd_cont));
-			if(new_fd==NULL){
-				while(!list_empty(&current->fd_list)){
-					new_fd=list_entry(list_pop_front(&current->fd_list),struct fd_cont,elem);
-					file_close(new_fd->file);
-					free(new_fd);
-				}
-				goto error;
+			if(new_fd==NULL){	//if malloc fails, free all resources(fd_cont, fd_list)
+				goto free_res;
 			}
-			new_fd->fd=parent_fd->fd;
-			new_fd->file = file_duplicate(parent_fd->file);
+			
+			list_init(&new_fd->fdl);//initialize fd_list and add first fd to ita
+
+			struct list_elem *parent_fde=list_front(&parent_fd->fdl);
+			struct fd_list *parent_fdl, *fdl;
+			do{
+				parent_fdl=list_entry(parent_fde,struct fd_list,elem);
+				fdl = (struct fd_list *)malloc(sizeof(struct fd_list));
+				
+				if(fdl==NULL) goto free_res;
+
+				fdl->fd=parent_fdl->fd;
+				list_push_back(&new_fd->fdl, &fdl->elem);
+				parent_fde=list_next(parent_fde);
+			}while(parent_fde != list_end(&parent_fd->fdl));
+			
+			if(parent_fd->file==NULL){
+				new_fd->file=NULL;
+				new_fd->std=parent_fd->std;
+			}else{
+				new_fd->file = file_duplicate(parent_fd->file);
+			}
 			list_push_back(&current->fd_list,&new_fd->elem);
 			pfd_elem=list_next(pfd_elem);	
 		}while(pfd_elem!=list_end(&parent->fd_list));
@@ -288,6 +336,17 @@ __do_fork (void *aux) {
 error:
 	sema_up(&pipe->sema);
 	thread_exit ();
+
+free_res:
+	while(!list_empty(&current->fd_list)){
+		new_fd=list_entry(list_pop_front(&current->fd_list),struct fd_cont,elem);//get already allocated fd_cont
+		while(!list_empty(&new_fd->fdl)){//free fd_list in fd_cont
+			free(list_entry(list_pop_front(&new_fd->fdl),struct fd_list,elem));
+		}
+		file_close(new_fd->file);
+		free(new_fd);
+	}
+	goto error;
 }
 
 /* Switch the current execution context to the f_name.
@@ -365,6 +424,9 @@ process_exit (void) {
 	if(list_begin(&curr->fd_list) != NULL){
 		while(!list_empty(&curr->fd_list)){
 			struct fd_cont *cont=list_entry(list_pop_front(&curr->fd_list), struct fd_cont,elem);
+			while(!list_empty(&cont->fdl)){
+				free(list_entry(list_pop_front(&cont->fdl),struct fd_list,elem));
+			}
 			file_close(cont->file);
 			free(cont);
 		}

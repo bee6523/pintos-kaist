@@ -138,10 +138,22 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				break;
 			}else{
 				container = allocate_fd_cont();
-				container->fd = allocate_fd();
+				int fd = allocate_fd();
+				struct fd_list *fdl = (struct fd_list *)malloc(sizeof(struct fd_list));
+				if(fdl==NULL){
+					sema_down(&file_access);
+					file_close(file);
+					sema_up(&file_access);
+					free_fd_cont(container);
+					f->R.rax=-1;
+					break;
+				}
+				list_init(&container->fdl);
+				fdl->fd=fd;
+				list_push_back(&container->fdl,&fdl->elem);
 				container->file=file;
 				list_push_back(&cur->fd_list,&container->elem);
-				f->R.rax=container->fd;
+				f->R.rax=fd;
 			}
 			break;
 		case SYS_FILESIZE:
@@ -156,17 +168,27 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_READ:
 			validateBuffer(f->R.rsi,f->R.rdx);
+	/*
 			if(f->R.rdi==0){
 				for(int i=0;i<f->R.rdx;i++){
 					*((char *)(f->R.rsi)+i)=input_getc();
 				}
 				f->R.rax=f->R.rdx;
 			}else{
-				container=get_cont_by_fd(cur,f->R.rdi);
-				if(container==NULL){
-					f->R.rax=-1;
-					break;
-				}
+	*/
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=-1;
+				break;
+			}
+			if(container->file==NULL){	//it means this fd is for STDIO
+				if(!container->std){	//check if it is STDIN
+					for(int i=0;i<f->R.rdx;i++){
+						*((char *)(f->R.rsi)+i)=input_getc();
+					}
+					f->R.rax=f->R.rdx;
+				}else f->R.rax=-1;	//error if STDOUT
+			}else{
 				sema_down(&file_access);
 				f->R.rax = file_read(container->file, f->R.rsi, f->R.rdx);
 				sema_up(&file_access);
@@ -174,14 +196,22 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_WRITE:
 			validateBuffer(f->R.rsi,f->R.rdx);
+	/*
 			if(f->R.rdi==1){
 				putbuf(f->R.rsi,f->R.rdx);
 			}else{
-				container=get_cont_by_fd(cur,f->R.rdi);
-				if(container==NULL){
-					f->R.rax=-1;
-					break;
-				}
+	*/
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=-1;
+				break;
+			}
+			if(container->file==NULL){
+				if(container->std){
+					putbuf(f->R.rsi,f->R.rdx);
+					f->R.rax=f->R.rdx;
+				}else f->R.rax=-1;
+			}else{
 				sema_down(&file_access);
 				f->R.rax = file_write(container->file, f->R.rsi,f->R.rdx);
 				sema_up(&file_access);
@@ -209,11 +239,18 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			container = get_cont_by_fd(cur,f->R.rdi);
 			if(container==NULL)
 				break;
-			sema_down(&file_access);
-			file_close(container->file);
-			sema_up(&file_access);
-			list_remove(&container->elem);
-			free_fd_cont(container);
+			struct list_elem *fdl=list_front(&container->fdl);
+			while(list_entry(fdl,struct fd_list,elem)->fd != f->R.rdi)
+				fdl=list_next(fdl);
+			list_remove(fdl);
+			free(list_entry(fdl,struct fd_list,elem));
+			if(list_empty(&container->fdl)){
+				sema_down(&file_access);
+				file_close(container->file);
+				sema_up(&file_access);
+				list_remove(&container->elem);
+				free_fd_cont(container);
+			}
 			break;
 		default:
 			thread_exit();

@@ -35,11 +35,17 @@ struct child_pipe {			/* used for fork and wait. */
 	struct semaphore sema;		/* when fork, parent allocate memory, initialize, then  */
 	struct list_elem elem;		/* give address of elem to child's parent_pipe. */
 };
-struct fd_cont {
-	int fd;
+struct fd_cont {			/* now in extra credit, one file description can have */
+	struct list fdl;		/* multiple file descriptor. so I used list to control it */
 	struct file * file;
+	bool std;			//STDOUT if true, STDIN if false. only set when STDIO, checked when file is NULL
 	struct list_elem elem;
 };
+struct fd_list {
+	int fd;
+	struct list_elem elem;
+};
+
 
 /* A kernel thread or user process.
  *
