@@ -67,6 +67,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 //	printf ("system call %d!\n", f->R.rax);
 	struct thread *cur=thread_current();
 	struct fd_cont *container;
+	struct list_elem *fdl;
 	struct file * file;
 	uint64_t callee_reg[6];
 	uintptr_t callee_rsp;
@@ -158,7 +159,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_FILESIZE:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL){
+			if(container==NULL || container->file == NULL){
 				f->R.rax=0;
 				break;
 			}
@@ -219,7 +220,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_SEEK:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL)
+			if(container==NULL || container->file==NULL)
 				break;
 			sema_down(&file_access);
 			file_seek(container->file,f->R.rsi);
@@ -227,7 +228,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_TELL:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL){
+			if(container==NULL || container->file==NULL){
 				f->R.rax=-1;
 				break;
 			}
@@ -239,7 +240,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			container = get_cont_by_fd(cur,f->R.rdi);
 			if(container==NULL)
 				break;
-			struct list_elem *fdl=list_front(&container->fdl);
+			fdl=list_front(&container->fdl);
 			while(list_entry(fdl,struct fd_list,elem)->fd != f->R.rdi)
 				fdl=list_next(fdl);
 			list_remove(fdl);
@@ -252,6 +253,45 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				free_fd_cont(container);
 			}
 			break;
+		case SYS_DUP2:
+			container = get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=-1;
+				break;
+			}
+			if(f->R.rdi==f->R.rsi){
+				f->R.rax=f->R.rsi;
+				break;
+			}
+			struct fd_list *fde=(struct fd_list *)malloc(sizeof(struct fd_list));//allocate new fd_list entry
+			if(fde==NULL){
+				f->R.rax=-1;
+				break;
+			}
+
+			struct fd_cont * cont2=get_cont_by_fd(cur,f->R.rsi);
+			if(cont2!= NULL){		//when newfd was previously open, same as SYS_CLOSE
+				fdl=list_front(&cont2->fdl);
+				while(list_entry(fdl,struct fd_list, elem)->fd != f->R.rsi)
+					fdl=list_next(fdl);
+				list_remove(fdl);
+				free(list_entry(fdl,struct fd_list,elem));
+				if(list_empty(&cont2->fdl)){
+					sema_down(&file_access);
+					file_close(cont2->file);
+					sema_up(&file_access);
+					list_remove(&cont2->elem);
+					free_fd_cont(cont2);
+				}
+			}
+
+			fde->fd=f->R.rsi;
+			list_push_back(&container->fdl,&fde->elem);	//add this fd to file description.
+
+			f->R.rax=f->R.rsi;
+			break;
+
+
 		default:
 			thread_exit();
 	}
