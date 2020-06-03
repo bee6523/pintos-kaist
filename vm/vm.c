@@ -63,10 +63,16 @@ err:
 
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
-spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
+spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct page *page = NULL;
 	/* TODO: Fill this function. */
+	struct sup_pte temp;
+	struct hash_elem *e;
 
+	temp->addr = va;
+	e = hash_find(&spt->spt_hash, &temp.hash_elem);
+	if(e != NULL)
+		page = hash_entry(e, struct sup_pte, elem)->page;
 	return page;
 }
 
@@ -76,6 +82,13 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
 	int succ = false;
 	/* TODO: Fill this function. */
+	struct sup_pte *spte = (struct sup_pte *)malloc(sizeof(struct sup_pte));
+	if(spte != NULL){
+		spte->page = page;
+		spte->addr = page->va;
+		if(hash_insert(spt->spt_hash, spte->elem) == NULL)
+			succ=true;
+	}
 
 	return succ;
 }
@@ -113,7 +126,16 @@ static struct frame *
 vm_get_frame (void) {
 	struct frame *frame = NULL;
 	/* TODO: Fill this function. */
-
+	void * ppage = palloc_get_page(PAL_USER);
+	if(ppage == NULL){
+		PANIC("todo");
+	}
+	frame = (struct frame *)malloc(sizeof(struct frame));
+	if(frame == NULL){
+		PANIC("todo?");
+	}
+	frame->kva = ppage;
+	
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
 	return frame;
@@ -151,11 +173,18 @@ vm_dealloc_page (struct page *page) {
 
 /* Claim the page that allocate on VA. */
 bool
-vm_claim_page (void *va UNUSED) {
+vm_claim_page (void *va) {
 	struct page *page = NULL;
 	/* TODO: Fill this function */
-
-	return vm_do_claim_page (page);
+	struct hash_elem *e;
+	struct sup_pte p;
+	p.addr = va;
+	e = hash_find(&thread_current()->spt->spt_hash,&p.elem);
+	if(e==NULL) return false;
+	else{
+		page = hash_entry(e, struct page, elem);
+		return vm_do_claim_page (page);
+	}
 }
 
 /* Claim the PAGE and set up the mmu. */
@@ -168,13 +197,27 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
+	pml4_set_page(thread_current()->pml4,page->va,frame->kva,true);
 
 	return swap_in (page, frame->kva);
 }
 
+static unsigned spt_hash_func(const struct hash_elem *p_, void *aux UNUSED){
+	const struct sup_pte *p = hash_entry(p_, struct sup_pte, elem);
+	return hash_bytes(&p->addr, sizeof(p->addr));
+}
+static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
+	const struct sup_pte *a = hash_entry(a_, struct sup_pte, elem);
+	const struct sup_pte *b = hash_entry(b_, struct sup_pte, elem);
+
+	return a->addr < b->addr;
+}
+
+
 /* Initialize new supplemental page table */
 void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_init (struct supplemental_page_table *spt) {
+	hash_init(&spt->spt_hash, spt_hash_func, spt_less_func,NULL);
 }
 
 /* Copy supplemental page table from src to dst */

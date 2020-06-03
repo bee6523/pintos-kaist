@@ -82,7 +82,14 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	struct hash spt_hash;	
 };
+
+struct sup_pte {
+	struct hash_elem elem;
+	void * addr;
+	struct page *page;
+}
 
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
