@@ -2,6 +2,7 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include <hash.h>
 
 enum vm_type {
 	/* page not initialized */
@@ -43,7 +44,7 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
-
+	enum vm_type type;
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
@@ -89,7 +90,8 @@ struct sup_pte {
 	struct hash_elem elem;
 	void * addr;
 	struct page *page;
-}
+	int marker;	//identifies if page is stack or something.
+};
 
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);

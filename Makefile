@@ -15,7 +15,7 @@ clean::
 distclean:: clean
 	find . -name '*~' -exec rm '{}' \;
 
-TAGS_SUBDIRS = $(BUILD_SUBDIRS) devices lib
+TAGS_SUBDIRS = $(BUILD_SUBDIRS) devices lib include
 TAGS_SOURCES = find $(TAGS_SUBDIRS) -name \*.[chS] -print
 
 TAGS::

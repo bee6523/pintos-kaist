@@ -1,8 +1,11 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
 #include "threads/malloc.h"
+#include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+#include "vm/anon.h"
+#include "vm/file.h"
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -48,14 +51,30 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
 
 	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct page *page = NULL;
+	
 
 	/* Check wheter the upage is already occupied or not. */
 	if (spt_find_page (spt, upage) == NULL) {
 		/* TODO: Create the page, fetch the initialier according to the VM type,
 		 * TODO: and then create "uninit" page struct by calling uninit_new. You
 		 * TODO: should modify the field after calling the uninit_new. */
-
+		page = (struct page *)malloc(sizeof(struct page));
+		if(page == NULL) goto err;
+		switch(type&3){
+			case VM_ANON:
+				uninit_new(page,upage,init,type,aux,anon_initializer);
+				break;
+			case VM_FILE:
+				uninit_new(page,upage,init,type,aux,file_map_initializer);
+				break;
+			default:
+				PANIC("wrong vm_type");
+		}
+		page->type = type;
 		/* TODO: Insert the page into the spt. */
+		if(spt_insert_page(spt, page))
+			return true;
 	}
 err:
 	return false;
@@ -69,8 +88,8 @@ spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct sup_pte temp;
 	struct hash_elem *e;
 
-	temp->addr = va;
-	e = hash_find(&spt->spt_hash, &temp.hash_elem);
+	temp.addr = (void *)((uintptr_t)va & (~(PGSIZE-1)));	//aligning va to PGSIZE
+	e = hash_find(&spt->spt_hash, &temp.elem);
 	if(e != NULL)
 		page = hash_entry(e, struct sup_pte, elem)->page;
 	return page;
@@ -78,15 +97,15 @@ spt_find_page (struct supplemental_page_table *spt, void *va) {
 
 /* Insert PAGE into spt with validation. */
 bool
-spt_insert_page (struct supplemental_page_table *spt UNUSED,
-		struct page *page UNUSED) {
+spt_insert_page (struct supplemental_page_table *spt,
+		struct page *page) {
 	int succ = false;
 	/* TODO: Fill this function. */
 	struct sup_pte *spte = (struct sup_pte *)malloc(sizeof(struct sup_pte));
 	if(spte != NULL){
 		spte->page = page;
 		spte->addr = page->va;
-		if(hash_insert(spt->spt_hash, spte->elem) == NULL)
+		if(hash_insert(&spt->spt_hash, &spte->elem) == NULL)
 			succ=true;
 	}
 
@@ -135,6 +154,7 @@ vm_get_frame (void) {
 		PANIC("todo?");
 	}
 	frame->kva = ppage;
+	frame->page = NULL;
 	
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
@@ -153,13 +173,15 @@ vm_handle_wp (struct page *page UNUSED) {
 
 /* Return true on success */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
+vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
-
+	page = spt_find_page(spt,addr);
+	
+	
 	return vm_do_claim_page (page);
 }
 
@@ -179,10 +201,10 @@ vm_claim_page (void *va) {
 	struct hash_elem *e;
 	struct sup_pte p;
 	p.addr = va;
-	e = hash_find(&thread_current()->spt->spt_hash,&p.elem);
+	e = hash_find(&thread_current()->spt.spt_hash,&p.elem);
 	if(e==NULL) return false;
 	else{
-		page = hash_entry(e, struct page, elem);
+		page = hash_entry(e, struct sup_pte, elem)->page;
 		return vm_do_claim_page (page);
 	}
 }
@@ -195,10 +217,9 @@ vm_do_claim_page (struct page *page) {
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
-
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
-	pml4_set_page(thread_current()->pml4,page->va,frame->kva,true);
-
+	if(!pml4_set_page(thread_current()->pml4,page->va,frame->kva,true))
+		return false;
 	return swap_in (page, frame->kva);
 }
 
