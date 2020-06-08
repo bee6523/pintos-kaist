@@ -61,7 +61,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		 * TODO: should modify the field after calling the uninit_new. */
 		page = (struct page *)malloc(sizeof(struct page));
 		if(page == NULL) goto err;
-		switch(type&3){
+		switch(type&7){
 			case VM_ANON:
 				uninit_new(page,upage,init,type,aux,anon_initializer);
 				break;
@@ -165,7 +165,15 @@ vm_get_frame (void) {
 
 /* Growing the stack. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
+	bool success = false;
+	void *stack_addr = (void *) ((uintptr_t)addr & ~(PGSIZE-1));
+	if(!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_addr, true, NULL, NULL))
+		return false;
+	success = vm_claim_page(stack_addr);
+	if(success){
+		memset(stack_addr,0,PGSIZE);
+	}
 }
 
 /* Handle the fault on write_protected page */
@@ -181,11 +189,28 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	struct page *page = NULL;
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
+	uintptr_t rsp;
+	
+	if(user && is_kernel_vaddr(addr)) return false;
 	page = spt_find_page(spt,addr);
 	if(page==NULL){
-		return false;
-	}
+		if(user){		//user case rsp setting
+			rsp = f->rsp;
+		}else			//kernel case
+			rsp = thread_current()->trsp;
 	
+/*		if(write){
+			printf("\n\naddr %x, %d %d, rsp %x or %x, USER_STACK %x.\n\n",addr, user, write, rsp,thread_current()->trsp, USER_STACK);
+		}*/
+		if(write && ((uintptr_t)addr >= rsp-8)){
+			if(addr < ((uint8_t *)USER_STACK - 256*PGSIZE))
+				return false;
+			vm_stack_growth(addr);
+			return true;
+		}else{
+			thread_exit();		//error case
+		}
+	}
 	
 	return vm_do_claim_page (page);
 }
@@ -265,7 +290,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 		if (spt_find_page (dst, upage) == NULL) {
 			page = (struct page *)malloc(sizeof(struct page));
 			if(page == NULL) goto err;
-			switch(type&3){
+			switch(type&7){
 				case VM_ANON:
 					uninit_new(page,upage,NULL,type,NULL,anon_initializer);
 					break;

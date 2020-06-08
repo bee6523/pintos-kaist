@@ -64,7 +64,7 @@ syscall_init (void) {
 void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
-//	printf ("system call %d!\n", f->R.rax);
+	//printf ("system call %d!\n", f->R.rax);
 	struct thread *cur=thread_current();
 	struct fd_cont *container;
 	struct list_elem *fdl;
@@ -72,6 +72,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	uint64_t callee_reg[6];
 	uintptr_t callee_rsp;
 	uint64_t ret;
+
+	cur->trsp = f->rsp;
 	switch(f->R.rax){
 		case SYS_HALT:
 			power_off();

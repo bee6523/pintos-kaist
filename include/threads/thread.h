@@ -145,6 +145,8 @@ struct thread {
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
+	/* rsp saved on initial transition from user to kernel mode. */
+	uintptr_t trsp;
 #endif
 
 	/* Owned by thread.c. */

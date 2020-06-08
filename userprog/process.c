@@ -956,7 +956,6 @@ setup_stack (struct intr_frame *if_) {
 	/* TODO: Your code goes here */
 	if(!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL))
 		return false;
-
 	success = vm_claim_page(stack_bottom);
 	if(success){
 		memset(stack_bottom,0,PGSIZE);
