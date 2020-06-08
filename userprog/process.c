@@ -272,6 +272,7 @@ __do_fork (void *aux) {
 #else
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
+
 #endif
 
 	/* TODO: Your code goes here.
@@ -288,6 +289,7 @@ __do_fork (void *aux) {
 	process_init ();
 	
 	struct fd_cont *new_fd, *parent_fd;
+
 	if(!list_empty(&parent->fd_list)){
 		struct list_elem *pfd_elem=list_front(&parent->fd_list);
 		do{
@@ -957,6 +959,7 @@ setup_stack (struct intr_frame *if_) {
 
 	success = vm_claim_page(stack_bottom);
 	if(success){
+		memset(stack_bottom,0,PGSIZE);
 		if_->rsp = USER_STACK;
 	}
 	return success;

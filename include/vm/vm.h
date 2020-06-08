@@ -44,7 +44,9 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+	uint64_t *pml4;
 	enum vm_type type;
+	bool writable;
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
@@ -90,7 +92,6 @@ struct sup_pte {
 	struct hash_elem elem;
 	void * addr;
 	struct page *page;
-	int marker;	//identifies if page is stack or something.
 };
 
 #include "threads/thread.h"

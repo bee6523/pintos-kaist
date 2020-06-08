@@ -71,7 +71,9 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 			default:
 				PANIC("wrong vm_type");
 		}
+		page->pml4 = thread_current()->pml4;
 		page->type = type;
+		page->writable = writable;
 		/* TODO: Insert the page into the spt. */
 		if(spt_insert_page(spt, page))
 			return true;
@@ -180,6 +182,9 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
 	page = spt_find_page(spt,addr);
+	if(page==NULL){
+		return false;
+	}
 	
 	
 	return vm_do_claim_page (page);
@@ -213,12 +218,11 @@ vm_claim_page (void *va) {
 static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
-
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
-	if(!pml4_set_page(thread_current()->pml4,page->va,frame->kva,true))
+	if(!pml4_set_page(page->pml4,page->va,frame->kva,page->writable))
 		return false;
 	return swap_in (page, frame->kva);
 }
@@ -243,8 +247,57 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 
 /* Copy supplemental page table from src to dst */
 bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-		struct supplemental_page_table *src UNUSED) {
+supplemental_page_table_copy (struct supplemental_page_table *dst,
+		struct supplemental_page_table *src) {
+	struct hash_iterator i;
+	struct page * page;
+	void * upage;
+	bool writable;
+	enum vm_type type;
+	hash_first(&i, &src->spt_hash);
+	while(hash_next(&i)){
+		struct sup_pte *spte = hash_entry(hash_cur(&i),struct sup_pte, elem);
+		upage = spte->page->va;
+		type = spte->page->type;
+		writable = spte->page->writable;
+		/* Check wheter the upage is already occupied or not. */
+
+		if (spt_find_page (dst, upage) == NULL) {
+			page = (struct page *)malloc(sizeof(struct page));
+			if(page == NULL) goto err;
+			switch(type&3){
+				case VM_ANON:
+					uninit_new(page,upage,NULL,type,NULL,anon_initializer);
+					break;
+				case VM_FILE:
+					uninit_new(page,upage,NULL,type,NULL,file_map_initializer);
+					break;
+				default:
+					PANIC("wrong vm_type");
+			}
+			page->pml4 = thread_current()->pml4;
+			page->type = type;
+			page->writable = writable;
+			if(!spt_insert_page(dst, page))
+				goto err;
+			if(!vm_do_claim_page(page))
+				goto err;
+			if(spte->page->frame == NULL && !vm_do_claim_page(spte->page))
+				goto err;
+			memcpy(page->frame->kva,spte->page->frame->kva,PGSIZE);
+		}
+	}
+	return true;
+err:	
+	printf("\n\nerror occured\n\n");
+	return false;
+}
+
+void
+free_hash_element(struct hash_elem *element, void *aux UNUSED){
+	struct sup_pte *spte = hash_entry(element, struct sup_pte, elem);
+	destroy(spte->page);
+	free(spte);
 }
 
 /* Free the resource hold by the supplemental page table */
@@ -252,4 +305,5 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
+	hash_clear(&spt->spt_hash, free_hash_element);
 }
