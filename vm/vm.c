@@ -208,7 +208,8 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 			vm_stack_growth(addr);
 			return true;
 		}else{
-			thread_exit();		//error case
+			return false;
+	//		thread_exit();		//error case
 		}
 	}
 	

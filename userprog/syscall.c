@@ -16,6 +16,7 @@
 #include "filesys/file.h"
 #include "lib/string.h"
 #include "intrinsic.h"
+#include "vm/vm.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -171,14 +172,6 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_READ:
 			validateBuffer(f->R.rsi,f->R.rdx);
-	/*
-			if(f->R.rdi==0){
-				for(int i=0;i<f->R.rdx;i++){
-					*((char *)(f->R.rsi)+i)=input_getc();
-				}
-				f->R.rax=f->R.rdx;
-			}else{
-	*/
 			container=get_cont_by_fd(cur,f->R.rdi);
 			if(container==NULL){
 				f->R.rax=-1;
@@ -292,7 +285,27 @@ syscall_handler (struct intr_frame *f UNUSED) {
 
 			f->R.rax=f->R.rsi;
 			break;
+		case SYS_MMAP:
+		//	validateBuffer(f->R.rsi,f->R.rdx);
+			container=get_cont_by_fd(cur,f->R.r10);
+			if(container==NULL){
+				f->R.rax=NULL;
+				break;
+			}
+			if(container->file==NULL || file_length(container->file)==0 || f->R.rdi==0){	//it means this fd is for STDIO
+				f->R.rax = NULL;
+				break;
+			}else{
+				if(f->R>rdi&(PGSIZE-1)){
+					f->R.rax = NULL;
+					break;
+				}
+				load_segment(container->file,f->R.r8,f->R.rdi,f->R.rsi,f->R.rdx);
+			}
 
+			break;
+		case SYS_MUNMAP:
+			break;
 
 		default:
 			thread_exit();
@@ -324,4 +337,63 @@ static struct fd_cont *allocate_fd_cont(void){
 }
 static void free_fd_cont(struct fd_cont *cont){
 	free(cont);
+}
+struct file_info {
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+};
+
+static bool
+lazy_load_segment (struct page *page, void *aux) {
+	/* TODO: Load the segment from the file */
+	/* TODO: This called when the first page fault occurs on address VA. */
+	/* TODO: VA is available when calling this function. */
+	struct file_info *fi = (struct file_info *)aux;
+	size_t page_read_bytes = fi->page_read_bytes;
+	size_t page_zero_bytes = PGSIZE - page_read_bytes;
+	file_seek(fi->file,fi->ofs);
+	uintptr_t kpage = page->frame->kva;
+	sema_down(&file_access);
+	if (file_read (fi->file, kpage, page_read_bytes) != (int) page_read_bytes) {
+		sema_up(&file_access);
+		free(fi);
+		return false;
+	}
+	sema_up(&file_access);
+	memset (kpage + page_read_bytes, 0, page_zero_bytes);
+	free(fi);
+	return true;
+}
+static bool
+load_segment (struct file *file, off_t ofs, uint8_t *upage,
+		uint32_t read_bytes, bool writable) {
+	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
+	ASSERT (pg_ofs (upage) == 0);
+	ASSERT (ofs % PGSIZE == 0);
+	uint8_t offset = 0;
+	while (read_bytes > 0) {
+		/* Do calculate how to fill this page.
+		 * We will read PAGE_READ_BYTES bytes from FILE
+		 * and zero the final PAGE_ZERO_BYTES bytes. */
+		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+		size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		struct file_info *fi = (struct file_info *)malloc(sizeof(struct file_info));
+		fi->file = file;
+		fi->ofs = ofs+offset*PGSIZE;
+		fi->page_read_bytes = page_read_bytes;
+		offset++;
+
+		void *aux = fi;
+		if (!vm_alloc_page_with_initializer (VM_FILE, upage,
+					writable, lazy_load_segment, aux))
+			return false;
+
+		/* Advance. */
+		read_bytes -= page_read_bytes;
+		upage += PGSIZE;
+	}
+	return true;
 }
