@@ -97,7 +97,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			callee_reg[5]=f->R.r15;
 			callee_rsp=f->rsp;
 
-			ret=process_fork(f->R.rdi,f);
+			ret=process_fork((char *)f->R.rdi,f);
 			
 			f->R.rax=ret;
 			f->rsp=callee_rsp;		//restore callee saved registers
@@ -113,7 +113,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			char *fn_copy = palloc_get_page (PAL_USER);	//freeing fn_copy is in process_exec
 			if (fn_copy == NULL)
 				return TID_ERROR;
-			strlcpy (fn_copy, f->R.rdi, PGSIZE);
+			strlcpy (fn_copy, (char *)f->R.rdi, PGSIZE);
 
 			ret=process_exec(fn_copy);
 			f->R.rax=ret;
@@ -124,21 +124,21 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_CREATE:
 			validateAddress(f->R.rdi);
-			validateAddress(f->R.rdi+strlen(f->R.rdi)+1);
+			validateAddress(f->R.rdi+strlen((char *)f->R.rdi)+1);
 			sema_down(&file_access);
-			f->R.rax = filesys_create(f->R.rdi,f->R.rsi);
+			f->R.rax = filesys_create((char *)f->R.rdi,f->R.rsi);
 			sema_up(&file_access);
 			break;
 		case SYS_REMOVE:
 			validateAddress(f->R.rdi);
 			sema_down(&file_access);
-			f->R.rax = filesys_remove(f->R.rdi);
+			f->R.rax = filesys_remove((char *)f->R.rdi);
 			sema_up(&file_access);
 			break;
 		case SYS_OPEN:
 			validateAddress(f->R.rdi);
 			sema_down(&file_access);
-			file = filesys_open(f->R.rdi);
+			file = filesys_open((char *)f->R.rdi);
 			sema_up(&file_access);
 			if(file==NULL){
 				f->R.rax=-1;

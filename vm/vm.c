@@ -7,6 +7,31 @@
 #include "vm/anon.h"
 #include "vm/file.h"
 
+struct frame_table ft;
+
+/* hash helper functions */
+
+static unsigned spt_hash_func(const struct hash_elem *p_, void *aux UNUSED){
+	const struct page *p = hash_entry(p_, struct page, elem);
+	return hash_bytes(&p->va, sizeof(p->va));
+}
+static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
+	const struct page *a = hash_entry(a_, struct page, elem);
+	const struct page *b = hash_entry(b_, struct page, elem);
+
+	return a->va < b->va;
+}
+static unsigned ft_hash_func(const struct hash_elem *p_, void *aux UNUSED){
+	const struct frame *p = hash_entry(p_, struct frame, elem);
+	return hash_bytes(&p->kva, sizeof(p->kva));
+}
+static bool ft_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
+	const struct frame *a = hash_entry(a_, struct frame, elem);
+	const struct frame *b = hash_entry(b_, struct frame, elem);
+
+	return a->kva < b->kva;
+}
+
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 void
@@ -19,7 +44,12 @@ vm_init (void) {
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
+
+	
+	hash_init(&ft.ft_hash, ft_hash_func, ft_less_func,NULL);
+	hash_first(&ft.hand, &ft.ft_hash);
 }
+
 
 /* Get the type of the page. This function is useful if you want to know the
  * type of the page after it will be initialized.
@@ -115,12 +145,40 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	return true;
 }
 
+/* helper function for vm_get_victim. 
+   check if one of pages refering frame has accessed frame */
+static bool is_frame_accessed(const struct frame *frame){
+	uint64_t *pml4 = frame->page->pml4;
+	if(pml4_is_accessed(pml4,frame->kva) || pml4_is_accessed(pml4,frame->page->va))
+		return true;
+	else return false;
+}
+static void set_frame_accessed_zero(const struct frame *frame){
+	uint64_t *pml4 = frame->page->pml4;
+	pml4_set_accessed(pml4,frame->kva,false);
+	pml4_set_accessed(pml4,frame->page->va,false);
+}
+
 /* Get the struct frame, that will be evicted. */
 static struct frame *
 vm_get_victim (void) {
 	struct frame *victim = NULL;
 	 /* TODO: The policy for eviction is up to you. */
-
+	/* policy : clock algorithm */
+	struct hash_elem *e;
+	struct frame * candidate;
+	while(victim==NULL){
+		e = hash_next(&ft.hand);
+		if(e==NULL){	//if last element of hash
+			hash_first(&ft.hand, &ft.ft_hash);	//goto first element and find again
+			continue;
+		}
+		candidate = hash_entry(e, struct frame, elem);
+		if(is_frame_accessed(candidate)){
+			set_frame_accessed_zero(candidate);
+		}else
+			victim = candidate;
+	}
 	return victim;
 }
 
@@ -128,10 +186,11 @@ vm_get_victim (void) {
  * Return NULL on error.*/
 static struct frame *
 vm_evict_frame (void) {
-	struct frame *victim UNUSED = vm_get_victim ();
+	struct frame *victim = vm_get_victim ();
 	/* TODO: swap out the victim and return the evicted frame. */
-
-	return NULL;
+	swap_out(victim->page);
+	victim->page = NULL;
+	return victim;
 }
 
 /* palloc() and get frame. If there is no available page, evict the page
@@ -143,16 +202,23 @@ vm_get_frame (void) {
 	struct frame *frame = NULL;
 	/* TODO: Fill this function. */
 	void * ppage = palloc_get_page(PAL_USER);
+	struct hash_elem *chk;
 	if(ppage == NULL){
-		PANIC("todo");
+		frame = vm_evict_frame();
+	}else{
+		frame = (struct frame *)malloc(sizeof(struct frame));
+		if(frame == NULL){
+			PANIC("todo?");
+		}
+		frame->kva = ppage;
+		frame->page = NULL;
+		chk = hash_insert(&ft.ft_hash, &frame->elem);
+		if(chk != NULL){
+			free(frame);
+			frame = hash_entry(chk, struct frame, elem);
+		}	
 	}
-	frame = (struct frame *)malloc(sizeof(struct frame));
-	if(frame == NULL){
-		PANIC("todo?");
-	}
-	frame->kva = ppage;
-	frame->page = NULL;
-	
+
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
 	return frame;
@@ -174,6 +240,7 @@ vm_stack_growth (void *addr) {
 /* Handle the fault on write_protected page */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
+	return true;
 }
 
 /* Return true on success */
@@ -206,6 +273,13 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 			return false;
 	//		thread_exit();		//error case
 		}
+	}else if(page->frame != NULL){
+		//copy on write case.
+		if(page->writable && write){
+			//should check copy on write
+			return vm_handle_wp(page);
+		}
+		return false; //otherwise should not happen
 	}
 	
 	return vm_do_claim_page (page);
@@ -246,17 +320,6 @@ vm_do_claim_page (struct page *page) {
 	if(!pml4_set_page(page->pml4,page->va,frame->kva,page->writable))
 		return false;
 	return swap_in (page, frame->kva);
-}
-
-static unsigned spt_hash_func(const struct hash_elem *p_, void *aux UNUSED){
-	const struct page *p = hash_entry(p_, struct page, elem);
-	return hash_bytes(&p->va, sizeof(p->va));
-}
-static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
-	const struct page *a = hash_entry(a_, struct page, elem);
-	const struct page *b = hash_entry(b_, struct page, elem);
-
-	return a->va < b->va;
 }
 
 
@@ -317,6 +380,8 @@ err:
 void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
+	if(spte->frame)
+		spte->frame->page = NULL;
 	vm_dealloc_page(spte);
 }
 

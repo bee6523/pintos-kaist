@@ -64,6 +64,7 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+	struct hash_elem elem;
 };
 
 /* The function table for page operations.
@@ -88,12 +89,10 @@ struct page_operations {
 struct supplemental_page_table {
 	struct hash spt_hash;	
 };
-/*
-struct sup_pte {
-	struct hash_elem elem;
-	void * addr;
-	struct page *page;
-};*/
+struct frame_table{
+	struct hash ft_hash;
+	struct hash_iterator hand;
+};
 
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
