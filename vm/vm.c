@@ -86,13 +86,13 @@ struct page *
 spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct page *page = NULL;
 	/* TODO: Fill this function. */
-	struct sup_pte temp;
+	struct page temp;
 	struct hash_elem *e;
 
-	temp.addr = (void *)((uintptr_t)va & (~(PGSIZE-1)));	//aligning va to PGSIZE
+	temp.va = (void *)((uintptr_t)va & (~(PGSIZE-1)));	//aligning va to PGSIZE
 	e = hash_find(&spt->spt_hash, &temp.elem);
 	if(e != NULL)
-		page = hash_entry(e, struct sup_pte, elem)->page;
+		page = hash_entry(e, struct page, elem);
 	return page;
 }
 
@@ -102,12 +102,8 @@ spt_insert_page (struct supplemental_page_table *spt,
 		struct page *page) {
 	int succ = false;
 	/* TODO: Fill this function. */
-	struct sup_pte *spte = (struct sup_pte *)malloc(sizeof(struct sup_pte));
-	if(spte != NULL){
-		spte->page = page;
-		spte->addr = page->va;
-		if(hash_insert(&spt->spt_hash, &spte->elem) == NULL)
-			succ=true;
+	if(hash_insert(&spt->spt_hash, &page->elem) == NULL){
+		succ=true;
 	}
 
 	return succ;
@@ -229,12 +225,12 @@ vm_claim_page (void *va) {
 	struct page *page = NULL;
 	/* TODO: Fill this function */
 	struct hash_elem *e;
-	struct sup_pte p;
-	p.addr = va;
+	struct page p;
+	p.va = va;
 	e = hash_find(&thread_current()->spt.spt_hash,&p.elem);
 	if(e==NULL) return false;
 	else{
-		page = hash_entry(e, struct sup_pte, elem)->page;
+		page = hash_entry(e, struct page, elem);
 		return vm_do_claim_page (page);
 	}
 }
@@ -253,14 +249,14 @@ vm_do_claim_page (struct page *page) {
 }
 
 static unsigned spt_hash_func(const struct hash_elem *p_, void *aux UNUSED){
-	const struct sup_pte *p = hash_entry(p_, struct sup_pte, elem);
-	return hash_bytes(&p->addr, sizeof(p->addr));
+	const struct page *p = hash_entry(p_, struct page, elem);
+	return hash_bytes(&p->va, sizeof(p->va));
 }
 static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
-	const struct sup_pte *a = hash_entry(a_, struct sup_pte, elem);
-	const struct sup_pte *b = hash_entry(b_, struct sup_pte, elem);
+	const struct page *a = hash_entry(a_, struct page, elem);
+	const struct page *b = hash_entry(b_, struct page, elem);
 
-	return a->addr < b->addr;
+	return a->va < b->va;
 }
 
 
@@ -281,10 +277,10 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 	enum vm_type type;
 	hash_first(&i, &src->spt_hash);
 	while(hash_next(&i)){
-		struct sup_pte *spte = hash_entry(hash_cur(&i),struct sup_pte, elem);
-		upage = spte->page->va;
-		type = spte->page->type;
-		writable = spte->page->writable;
+		struct page *spte = hash_entry(hash_cur(&i),struct page, elem);
+		upage = spte->va;
+		type = spte->type;
+		writable = spte->writable;
 		/* Check wheter the upage is already occupied or not. */
 
 		if (spt_find_page (dst, upage) == NULL) {
@@ -307,9 +303,9 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 				goto err;
 			if(!vm_do_claim_page(page))
 				goto err;
-			if(spte->page->frame == NULL && !vm_do_claim_page(spte->page))
+			if(spte->frame == NULL && !vm_do_claim_page(spte))
 				goto err;
-			memcpy(page->frame->kva,spte->page->frame->kva,PGSIZE);
+			memcpy(page->frame->kva,spte->frame->kva,PGSIZE);
 		}
 	}
 	return true;
@@ -320,9 +316,8 @@ err:
 
 void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
-	struct sup_pte *spte = hash_entry(element, struct sup_pte, elem);
-	destroy(spte->page);
-	free(spte);
+	struct page *spte = hash_entry(element, struct page, elem);
+	vm_dealloc_page(spte);
 }
 
 /* Free the resource hold by the supplemental page table */

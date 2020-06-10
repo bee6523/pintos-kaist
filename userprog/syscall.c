@@ -46,6 +46,9 @@ static void validateAddress(uint64_t uaddr);
 static int allocate_fd(void);
 static struct fd_cont *allocate_fd_cont(void);
 static void free_fd_cont(struct fd_cont *cont);
+static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+		uint32_t read_bytes, bool writable);
+static bool lazy_load_segment (struct page *page, void *aux);
 
 void
 syscall_init (void) {
@@ -296,7 +299,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax = NULL;
 				break;
 			}else{
-				if(f->R>rdi&(PGSIZE-1)){
+				if(f->R.rdi&(PGSIZE-1)){
 					f->R.rax = NULL;
 					break;
 				}
@@ -368,7 +371,6 @@ lazy_load_segment (struct page *page, void *aux) {
 static bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, bool writable) {
-	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT (pg_ofs (upage) == 0);
 	ASSERT (ofs % PGSIZE == 0);
 	uint8_t offset = 0;

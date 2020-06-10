@@ -44,6 +44,7 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+	struct hash_elem elem;
 	uint64_t *pml4;
 	enum vm_type type;
 	bool writable;
@@ -87,12 +88,12 @@ struct page_operations {
 struct supplemental_page_table {
 	struct hash spt_hash;	
 };
-
+/*
 struct sup_pte {
 	struct hash_elem elem;
 	void * addr;
 	struct page *page;
-};
+};*/
 
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
