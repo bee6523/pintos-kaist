@@ -1,10 +1,13 @@
 /* file.c: Implementation of memory mapped file object (mmaped object). */
 
 #include "vm/vm.h"
+#include "threads/vaddr.h"
 
 static bool file_map_swap_in (struct page *page, void *kva);
 static bool file_map_swap_out (struct page *page);
 static void file_map_destroy (struct page *page);
+
+extern struct semaphore file_access;
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -40,19 +43,115 @@ file_map_swap_out (struct page *page) {
 	struct file_page *file_page UNUSED = &page->file;
 }
 
+/* check if dirty */
+static bool is_dirty(const struct page *page){
+	uint64_t *pml4 = page->pml4;
+	if(pml4_is_dirty(pml4,page->va))// || pml4_is_dirty(pml4, page->frame->kva))
+		return true;
+	else return false;
+}
+
 /* Destory the file mapped page. PAGE will be freed by the caller. */
 static void
 file_map_destroy (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	struct file_page *file_page = &page->file;
+	if(is_dirty(page)){
+		sema_down(&file_access);
+		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
+		sema_up(&file_access);
+	}
+	file_close(file_page->file);
 }
 
+
+/* lazy_mapping function for filemap page */
+static bool
+lazy_map_segment (struct page *page, void *aux) {
+	/* TODO: Load the segment from the file */
+	/* TODO: This called when the first page fault occurs on address VA. */
+	/* TODO: VA is available when calling this function. */
+	struct file_info *fi = (struct file_info *)aux;
+	size_t page_read_bytes = fi->page_read_bytes;
+	size_t page_zero_bytes = PGSIZE - page_read_bytes;
+	file_seek(fi->file,fi->ofs);
+	uintptr_t kpage = page->frame->kva;
+
+	size_t check = file_length(fi->file)-fi->ofs;
+	if( check < page_read_bytes){
+	       	page_read_bytes = check;
+		page_zero_bytes = PGSIZE - page_read_bytes;
+	}
+
+	sema_down(&file_access);
+	if (file_read (fi->file, kpage, page_read_bytes) != (int)page_read_bytes) {
+		printf("\nerror reading. check:%d, pg:%d\n",check,page_read_bytes);
+		sema_up(&file_access);
+		free(fi);
+		return false;
+	}
+	sema_up(&file_access);
+	memset (kpage + page_read_bytes, 0, page_zero_bytes);
+	page->file.file = fi->file;
+	page->file.ofs = fi->ofs;
+	page->file.page_read_bytes = page_read_bytes;
+	free(fi);
+	return true;
+}
 /* Do the mmap */
 void *
 do_mmap (void *addr, size_t length, int writable,
-		struct file *file, off_t offset) {
+		struct file *file, off_t offset) {	
+	ASSERT (pg_ofs (addr) == 0);
+	ASSERT (offset % PGSIZE == 0);
+	uint8_t pgnum = 0;
+	enum vm_type type;
+	void * ret = addr;
+	if(file_length(file) < offset)
+		return NULL;
+	while (length > 0) {
+		/* Do calculate how to fill this page.
+		 * We will read PAGE_READ_BYTES bytes from FILE
+		 * and zero the final PAGE_ZERO_BYTES bytes. */
+		size_t page_read_bytes = length < PGSIZE ? length : PGSIZE;
+		size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+		/* TODO: Set up aux to pass information to the lazy_load_segment. */
+		struct file_info *fi = (struct file_info *)malloc(sizeof(struct file_info));
+		fi->file = file_reopen(file);
+		fi->ofs = offset+pgnum*PGSIZE;
+		fi->page_read_bytes = page_read_bytes;
+		if(page_read_bytes==length)
+			type = VM_FILE | F_LAST_PAGE;
+		else type = VM_FILE;
+		pgnum++;
+
+		void *aux = fi;
+		if (!vm_alloc_page_with_initializer (type, addr,
+					writable, lazy_map_segment, aux))
+			return NULL;
+
+		/* Advance. */
+		length -= page_read_bytes;
+		addr += PGSIZE;
+	}
+	return ret;
 }
 
 /* Do the munmap */
 void
 do_munmap (void *addr) {
-}
+	struct supplemental_page_table *spt = &thread_current()->spt;
+	struct page * fp = spt_find_page(spt, addr);
+	bool left = true;
+	size_t pgnum = 1;
+	if(VM_TYPE(fp->type) == VM_FILE){
+		while(left){
+			if(fp->type & F_LAST_PAGE){	//if this is last file-mapped page
+				left = false;
+			}
+
+			spt_remove_page(spt, fp);
+			fp = spt_find_page(spt, addr + pgnum*PGSIZE);
+		}
+	}
+}			

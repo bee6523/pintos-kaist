@@ -90,7 +90,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		 * TODO: should modify the field after calling the uninit_new. */
 		page = (struct page *)malloc(sizeof(struct page));
 		if(page == NULL) goto err;
-		switch(type&7){
+		switch(VM_TYPE(type)){
 			case VM_ANON:
 				uninit_new(page,upage,init,type,aux,anon_initializer);
 				break;
@@ -119,7 +119,7 @@ spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct page temp;
 	struct hash_elem *e;
 
-	temp.va = (void *)((uintptr_t)va & (~(PGSIZE-1)));	//aligning va to PGSIZE
+	temp.va = (void *)((uintptr_t)va & (~PGMASK));	//aligning va to PGSIZE
 	e = hash_find(&spt->spt_hash, &temp.elem);
 	if(e != NULL)
 		page = hash_entry(e, struct page, elem);
@@ -141,6 +141,7 @@ spt_insert_page (struct supplemental_page_table *spt,
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+	hash_delete(&spt->spt_hash, &page->elem);
 	vm_dealloc_page (page);
 	return true;
 }
@@ -228,7 +229,7 @@ vm_get_frame (void) {
 static void
 vm_stack_growth (void *addr) {
 	bool success = false;
-	void *stack_addr = (void *) ((uintptr_t)addr & ~(PGSIZE-1));
+	void *stack_addr = (void *) ((uintptr_t)addr & ~(PGMASK));
 	if(!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_addr, true, NULL, NULL))
 		return false;
 	success = vm_claim_page(stack_addr);
@@ -252,7 +253,6 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
 	uintptr_t rsp;
-	
 	if(user && is_kernel_vaddr(addr)) return false;
 	page = spt_find_page(spt,addr);
 	if(page==NULL){
@@ -262,11 +262,12 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 			rsp = thread_current()->trsp;
 	
 /*		if(write){
-			printf("\n\naddr %x, %d %d, rsp %x or %x, USER_STACK %x.\n\n",addr, user, write, rsp,thread_current()->trsp, USER_STACK);
+			printf("\n\naddr %x, %d %d, rsp %x or %x, np %d,  USER_STACK %x.\n\n",addr, user, write, rsp,thread_current()->trsp, not_present, USER_STACK-256*PGSIZE);
 		}*/
 		if(write && ((uintptr_t)addr >= rsp-8)){
-			if(addr < ((uint8_t *)USER_STACK - 256*PGSIZE))
+			if(addr < ((uint8_t *)USER_STACK - 256*PGSIZE) || addr > USER_STACK){
 				return false;
+			}
 			vm_stack_growth(addr);
 			return true;
 		}else{
@@ -349,7 +350,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 		if (spt_find_page (dst, upage) == NULL) {
 			page = (struct page *)malloc(sizeof(struct page));
 			if(page == NULL) goto err;
-			switch(type&7){
+			switch(VM_TYPE(type)){
 				case VM_ANON:
 					uninit_new(page,upage,NULL,type,NULL,anon_initializer);
 					break;
@@ -387,7 +388,7 @@ free_hash_element(struct hash_elem *element, void *aux UNUSED){
 
 /* Free the resource hold by the supplemental page table */
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
 	hash_clear(&spt->spt_hash, free_hash_element);

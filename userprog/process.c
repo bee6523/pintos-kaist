@@ -22,12 +22,14 @@
 #include "intrinsic.h"
 #ifdef VM
 #include "vm/vm.h"
+#include "vm/file.h"
 #endif
 
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
+
 
 /*helper functions for managing child process exit status*/
 static struct child_pipe init_process; //static variable for initial process
@@ -871,11 +873,6 @@ install_page (void *upage, void *kpage, bool writable) {
 /* From here, codes will be used after project 3.
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
-struct file_info {
-	struct file *file;
-	off_t ofs;
-	size_t page_read_bytes;
-};
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
@@ -944,6 +941,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	}
 	return true;
 }
+
 
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
 static bool
