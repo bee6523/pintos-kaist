@@ -152,9 +152,7 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
    check if one of pages refering frame has accessed frame */
 static bool is_frame_accessed(const struct frame *frame){
 	uint64_t *pml4 = frame->page->pml4;
-	if(pml4_is_accessed(pml4,frame->kva) || pml4_is_accessed(pml4,frame->page->va))
-		return true;
-	else return false;
+	return (pml4_is_accessed(pml4,frame->kva) || pml4_is_accessed(pml4,frame->page->va));
 }
 static void set_frame_accessed_zero(const struct frame *frame){
 	uint64_t *pml4 = frame->page->pml4;
@@ -165,31 +163,30 @@ static void set_frame_accessed_zero(const struct frame *frame){
 /* Get the struct frame, that will be evicted. */
 static struct frame *
 vm_get_victim (void) {
-	struct frame *victim = NULL;
+	//struct frame *victim = NULL;
 	 /* TODO: The policy for eviction is up to you. */
 	/* policy : clock algorithm */
 	struct hash_elem *e;
 	struct frame * candidate;
 	hash_first(&ft.hand, &ft.ft_hash);
-	while(victim==NULL){
+	while(true){
 		e = hash_next(&ft.hand);
 		if(e==NULL){	//if last element of hash
 			hash_first(&ft.hand, &ft.ft_hash);	//goto first element and find again
 			continue;
 		}
 		candidate = hash_entry(e, struct frame, elem);
-		if(candidate->page == NULL){
+	/*	if(candidate->page == NULL){
 	//	printf("evicted frame: aa%x\n\n",candidate->kva);
 	//		set_frame_accessed_zero(candidate);
 			victim = candidate;
 			break;
-		}
+		}*/
 		if(is_frame_accessed(candidate)){
 			set_frame_accessed_zero(candidate);
 		}else
-			victim = candidate;
+			return candidate;
 	}
-	return victim;
 }
 
 /* Evict one page and return the corresponding frame.
