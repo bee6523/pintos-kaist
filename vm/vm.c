@@ -144,8 +144,7 @@ spt_insert_page (struct supplemental_page_table *spt,
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	hash_delete(&spt->spt_hash, &page->elem);
-	vm_dealloc_page (page);
-	return true;
+	free(page);
 }
 
 /* helper function for vm_get_victim. 
@@ -176,12 +175,8 @@ vm_get_victim (void) {
 			continue;
 		}
 		candidate = hash_entry(e, struct frame, elem);
-	/*	if(candidate->page == NULL){
-	//	printf("evicted frame: aa%x\n\n",candidate->kva);
-	//		set_frame_accessed_zero(candidate);
-			victim = candidate;
-			break;
-		}*/
+		if(candidate->page == NULL)
+			return candidate;
 		if(is_frame_accessed(candidate)){
 			set_frame_accessed_zero(candidate);
 		}else
@@ -269,7 +264,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
 	uintptr_t rsp;
-	if(user && is_kernel_vaddr(addr)) return false;
+	if(user && is_kernel_vaddr(addr)) thread_exit();
 	page = spt_find_page(spt,addr);
 	if(page==NULL){
 		if(user){		//user case rsp setting
@@ -277,9 +272,6 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 		}else			//kernel case
 			rsp = thread_current()->trsp;
 	
-/*		if(write){
-			printf("\n\naddr %x, %d %d, rsp %x or %x, np %d,  USER_STACK %x.\n\n",addr, user, write, rsp,thread_current()->trsp, not_present, USER_STACK-256*PGSIZE);
-		}*/
 		if(write && ((uintptr_t)addr >= rsp-8)){
 			if(addr < ((uint8_t *)USER_STACK - 256*PGSIZE) || addr > USER_STACK){
 				return false;
@@ -287,8 +279,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 			vm_stack_growth(addr);
 			return true;
 		}else{
-			return false;
-	//		thread_exit();		//error case
+			thread_exit();		//error case
 		}
 	}else if(page->frame != NULL){
 		//copy on write case.
@@ -298,7 +289,6 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 		}
 		return false; //otherwise should not happen
 	}
-	
 	return vm_do_claim_page (page);
 }
 
@@ -333,6 +323,7 @@ vm_do_claim_page (struct page *page) {
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
+	//printf("addr: %x %x %x\n", page->va,frame->kva,USER_STACK );
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
 	if(!pml4_set_page(page->pml4,page->va,frame->kva,page->writable))
 		return false;
@@ -397,12 +388,12 @@ err:
 void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
-//	if(spte->frame){
-//		sema_down(&ft_access);
-//		hash_delete(&ft, &spte->frame->elem);
-//		sema_up(&ft_access);
-//		free(spte->frame);
-//	}
+	if(spte->frame){
+		sema_down(&ft_access);
+		hash_delete(&ft, &spte->frame->elem);
+		sema_up(&ft_access);
+		free(spte->frame);
+	}
 	vm_dealloc_page(spte);
 }
 

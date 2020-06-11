@@ -13,7 +13,7 @@ struct file_page {
 };
 struct file_info {
 	struct file * file;
-	off_t ofs;
+	uint32_t ofs;
 	size_t page_read_bytes;
 };
 

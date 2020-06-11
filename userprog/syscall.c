@@ -47,9 +47,6 @@ static void validateAddress(uint64_t uaddr);
 static int allocate_fd(void);
 static struct fd_cont *allocate_fd_cont(void);
 static void free_fd_cont(struct fd_cont *cont);
-static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
-		uint32_t read_bytes, bool writable);
-static bool lazy_load_segment (struct page *page, void *aux);
 
 void
 syscall_init (void) {
@@ -189,6 +186,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 					f->R.rax=f->R.rdx;
 				}else f->R.rax=-1;	//error if STDOUT
 			}else{
+				struct page * pg;
+				if((pg = spt_find_page(&cur->spt,f->R.rsi)) != NULL && !pg->writable){	//write to writable
+					thread_exit();
+				}
 				sema_down(&file_access);
 				f->R.rax = file_read(container->file, f->R.rsi, f->R.rdx);
 				sema_up(&file_access);
@@ -300,7 +301,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax = NULL;
 				break;
 			}else{
-				if(f->R.rdi&(PGMASK)){
+				if(f->R.rdi&(PGMASK) || f->R.r8&(PGMASK)){
 					f->R.rax = NULL;
 					break;
 				}
