@@ -31,24 +31,34 @@ file_map_initializer (struct page *page, enum vm_type type, void *kva) {
 	struct file_page *file_page = &page->file;
 }
 
-/* Swap in the page by read contents from the file. */
-static bool
-file_map_swap_in (struct page *page, void *kva) {
-	struct file_page *file_page UNUSED = &page->file;
-}
-
-/* Swap out the page by writeback contents to the file. */
-static bool
-file_map_swap_out (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
-}
-
 /* check if dirty */
 static bool is_dirty(const struct page *page){
 	uint64_t *pml4 = page->pml4;
 	if(pml4_is_dirty(pml4,page->va))// || pml4_is_dirty(pml4, page->frame->kva))
 		return true;
 	else return false;
+}
+
+/* Swap in the page by read contents from the file. */
+static bool
+file_map_swap_in (struct page *page, void *kva) {
+	struct file_page *file_page UNUSED = &page->file;
+	sema_down(&file_access);
+	file_read_at(file_page->file, kva, file_page->page_read_bytes, file_page->ofs);
+	sema_up(&file_access);
+	return true;
+}
+
+/* Swap out the page by writeback contents to the file. */
+static bool
+file_map_swap_out (struct page *page) {
+	struct file_page *file_page UNUSED = &page->file;
+	if(is_dirty(page)){
+		sema_down(&file_access);
+		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
+		sema_up(&file_access);
+	}
+	return true;
 }
 
 /* Destory the file mapped page. PAGE will be freed by the caller. */

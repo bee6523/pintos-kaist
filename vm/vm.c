@@ -8,6 +8,7 @@
 #include "vm/file.h"
 
 struct frame_table ft;
+struct semaphore ft_access;
 
 /* hash helper functions */
 
@@ -48,6 +49,7 @@ vm_init (void) {
 	
 	hash_init(&ft.ft_hash, ft_hash_func, ft_less_func,NULL);
 	hash_first(&ft.hand, &ft.ft_hash);
+	sema_init(&ft_access,1);
 }
 
 
@@ -168,6 +170,7 @@ vm_get_victim (void) {
 	/* policy : clock algorithm */
 	struct hash_elem *e;
 	struct frame * candidate;
+	hash_first(&ft.hand, &ft.ft_hash);
 	while(victim==NULL){
 		e = hash_next(&ft.hand);
 		if(e==NULL){	//if last element of hash
@@ -175,6 +178,12 @@ vm_get_victim (void) {
 			continue;
 		}
 		candidate = hash_entry(e, struct frame, elem);
+		if(candidate->page == NULL){
+	//	printf("evicted frame: aa%x\n\n",candidate->kva);
+	//		set_frame_accessed_zero(candidate);
+			victim = candidate;
+			break;
+		}
 		if(is_frame_accessed(candidate)){
 			set_frame_accessed_zero(candidate);
 		}else
@@ -187,10 +196,16 @@ vm_get_victim (void) {
  * Return NULL on error.*/
 static struct frame *
 vm_evict_frame (void) {
+	sema_down(&ft_access);
 	struct frame *victim = vm_get_victim ();
+	sema_up(&ft_access);
 	/* TODO: swap out the victim and return the evicted frame. */
-	swap_out(victim->page);
-	victim->page = NULL;
+	if(victim->page != NULL){
+		swap_out(victim->page);
+		pml4_clear_page(victim->page->pml4,victim->page->va);
+		victim->page->frame = NULL;
+		victim->page = NULL;
+	}
 	return victim;
 }
 
@@ -213,7 +228,11 @@ vm_get_frame (void) {
 		}
 		frame->kva = ppage;
 		frame->page = NULL;
+
+		sema_down(&ft_access);
 		chk = hash_insert(&ft.ft_hash, &frame->elem);
+		sema_up(&ft_access);
+
 		if(chk != NULL){
 			free(frame);
 			frame = hash_entry(chk, struct frame, elem);
@@ -381,8 +400,12 @@ err:
 void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
-	if(spte->frame)
-		spte->frame->page = NULL;
+//	if(spte->frame){
+//		sema_down(&ft_access);
+//		hash_delete(&ft, &spte->frame->elem);
+//		sema_up(&ft_access);
+//		free(spte->frame);
+//	}
 	vm_dealloc_page(spte);
 }
 
