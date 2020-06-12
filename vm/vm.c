@@ -164,7 +164,7 @@ static struct frame *
 vm_get_victim (void) {
 	//struct frame *victim = NULL;
 	 /* TODO: The policy for eviction is up to you. */
-	/* policy : clock algorithm */
+	/* policy : FIFO */
 	struct hash_elem *e;
 	struct frame * candidate;
 	hash_first(&ft.hand, &ft.ft_hash);

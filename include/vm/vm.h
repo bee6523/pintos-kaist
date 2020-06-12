@@ -91,7 +91,7 @@ struct supplemental_page_table {
 };
 struct frame_table{
 	struct hash ft_hash;
-	struct hash_iterator hand;
+	struct frame hand;
 };
 
 #include "threads/thread.h"

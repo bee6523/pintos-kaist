@@ -47,6 +47,8 @@ file_map_swap_in (struct page *page, void *kva) {
 	file_read_at(file_page->file, kva, file_page->page_read_bytes, file_page->ofs);
 	sema_up(&file_access);
 	memset(kva + file_page->page_read_bytes, 0, PGSIZE-file_page->page_read_bytes);
+	pml4_set_accessed(page->pml4,kva,false);
+	pml4_set_dirty(page->pml4,kva,false);
 	return true;
 }
 

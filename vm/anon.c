@@ -47,26 +47,52 @@ static bool
 anon_swap_in (struct page *page, void *kva) {
 	struct anon_page *anon_page = &page->anon;
 	size_t i;
-	if(anon_page->swap_idx == -1 || anon_page->swap_idx % 8)/* swap index -1 means no swap disk allocatded.
+	if(anon_page->swap_idx == -1){
+		//memset(kva,0,PGSIZE);		//if no swap disk allocated, can be considered as zero page. or maybe not
+		//return true;
+		return false;
+	}
+	if(anon_page->swap_idx % 8)/* swap index -1 means no swap disk allocatded.
 								   swap index should be multiple of 8
 								   because PGSIZE is 4096byte, sector size is 512
 								   */
 		return false;
+	
 	for(i=0;i<8;i++){
 		disk_read(swap_disk, anon_page->swap_idx + i, kva + i*DISK_SECTOR_SIZE);
 	}
 	sema_down(&st_access);
 	bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
 	sema_up(&st_access);
+	pml4_set_accessed(page->pml4,kva,false);
+	pml4_set_dirty(page->pml4,kva,false);
 	anon_page->swap_idx = -1;	//now no allocation
 	return true;
 }
+/* check if page is zero page
+static bool
+is_zeropage(void * addr){
+	unsigned char *va = addr;
+	size_t size=PGSIZE;
+	ASSERT(va != NULL);
+	while(size-- > 0){
+		if( *va != 0)
+			return false;
+		va++;
+	}
+	return true;
+}
+*/
 
 /* Swap out the page by writing contents to the swap disk. */
 static bool
 anon_swap_out (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
 	size_t i;
+	/*if(is_zeropage(page->va)){	//check if page is all zero bytes
+		anon_page->swap_idx = -1;
+		return true;
+	}*/
 	sema_down(&st_access);
 	anon_page->swap_idx = bitmap_scan_and_flip(swap_table,0,8,false);
 	sema_up(&st_access);
