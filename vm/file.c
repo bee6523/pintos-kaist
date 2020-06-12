@@ -66,12 +66,12 @@ file_map_swap_out (struct page *page) {
 static void
 file_map_destroy (struct page *page) {
 	struct file_page *file_page = &page->file;
+	sema_down(&file_access);
 	if(is_dirty(page)){
-		sema_down(&file_access);
 		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
-		sema_up(&file_access);
 	}
 	file_close(file_page->file);
+	sema_up(&file_access);
 }
 
 
@@ -126,7 +126,9 @@ do_mmap (void *addr, size_t length, int writable,
 
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
 		struct file_info *fi = (struct file_info *)malloc(sizeof(struct file_info));
+		sema_down(&file_access);
 		fi->file = file_reopen(file);
+		sema_up(&file_access);
 		fi->ofs = offset + pgnum*PGSIZE;
 		fi->page_read_bytes = page_read_bytes;
 
@@ -159,9 +161,11 @@ do_munmap (void *addr) {
 			if(fp->type & F_LAST_PAGE){	//if this is last file-mapped page
 				left = false;
 			}
-
-			file_map_destroy(fp);
-			fp->frame->page = NULL;
+			destroy(fp);
+			if(fp->frame){
+				fp->frame->page = NULL;
+				fp->frame = NULL;
+			}
 			pml4_clear_page(fp->pml4,fp->va);
 			spt_remove_page(spt, fp);
 			fp = spt_find_page(spt, addr + pgnum*PGSIZE);

@@ -187,7 +187,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				}else f->R.rax=-1;	//error if STDOUT
 			}else{
 				struct page * pg;
-				if((pg = spt_find_page(&cur->spt,f->R.rsi)) != NULL && !pg->writable){	//write to writable
+				if((pg = spt_find_page(&cur->spt,f->R.rsi)) == NULL){
+					if(!(f->R.rsi > f->rsp-8 && f->R.rsi < USER_STACK))	//if not stack grow case, exit
+						thread_exit();
+				}else if(!pg->writable){	//write to writable
 					thread_exit();
 				}
 				sema_down(&file_access);

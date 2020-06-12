@@ -264,6 +264,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
 	uintptr_t rsp;
+//	printf("fault: %x %d %d %d\n\n", addr, user,write,not_present);
 	if(user && is_kernel_vaddr(addr)) thread_exit();
 	page = spt_find_page(spt,addr);
 	if(page==NULL){
@@ -279,7 +280,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 			vm_stack_growth(addr);
 			return true;
 		}else{
-			thread_exit();		//error case
+			return false;
 		}
 	}else if(page->frame != NULL){
 		//copy on write case.
