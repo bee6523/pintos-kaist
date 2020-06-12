@@ -30,6 +30,7 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+extern struct semaphore file_access;
 
 /*helper functions for managing child process exit status*/
 static struct child_pipe init_process; //static variable for initial process
@@ -613,7 +614,9 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* Open executable file. */
 	argv=strtok_r(file_tokens," ",&tokenizer);
+	sema_down(&file_access);
 	file = filesys_open (argv);
+	sema_up(&file_access);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;

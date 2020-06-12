@@ -19,11 +19,10 @@ main (int argc UNUSED, char *argv[])
   unsigned char *p;
   size_t size;
   size_t i;
-
   quiet = true;
+msg("hi!");
 
   CHECK ((handle = open (argv[1])) > 1, "open \"%s\"", argv[1]);
-
   size = read (handle, buf, sizeof buf);
   for (i = 0; i < size; i++)
     histogram[buf[i]]++;
