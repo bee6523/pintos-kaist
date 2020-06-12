@@ -22,6 +22,7 @@ static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_
 
 	return a->va < b->va;
 }
+/*
 static unsigned ft_hash_func(const struct hash_elem *p_, void *aux UNUSED){
 	const struct frame *p = hash_entry(p_, struct frame, elem);
 	return hash_bytes(&p->kva, sizeof(p->kva));
@@ -31,7 +32,7 @@ static bool ft_less_func(const struct hash_elem *a_, const struct hash_elem *b_,
 	const struct frame *b = hash_entry(b_, struct frame, elem);
 
 	return a->kva < b->kva;
-}
+}*/
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -47,8 +48,8 @@ vm_init (void) {
 	/* TODO: Your code goes here. */
 
 	
-	hash_init(&ft.ft_hash, ft_hash_func, ft_less_func,NULL);
-	hash_first(&ft.hand, &ft.ft_hash);
+	list_init(&ft.ft_hash);
+	ft.hand = list_head(&ft.ft_hash);
 	sema_init(&ft_access,1);
 }
 
@@ -165,16 +166,14 @@ vm_get_victim (void) {
 	//struct frame *victim = NULL;
 	 /* TODO: The policy for eviction is up to you. */
 	/* policy : FIFO */
-	struct hash_elem *e;
 	struct frame * candidate;
-	hash_first(&ft.hand, &ft.ft_hash);
 	while(true){
-		e = hash_next(&ft.hand);
-		if(e==NULL){	//if last element of hash
-			hash_first(&ft.hand, &ft.ft_hash);	//goto first element and find again
+		ft.hand = list_next(ft.hand);
+		if(ft.hand==list_tail(&ft.ft_hash)){	//if last element of hash
+			ft.hand = list_head(&ft.ft_hash);	//goto first element and find again
 			continue;
 		}
-		candidate = hash_entry(e, struct frame, elem);
+		candidate = list_entry(ft.hand, struct frame, elem);
 		if(candidate->page == NULL)
 			return candidate;
 		if(is_frame_accessed(candidate)){
@@ -222,13 +221,13 @@ vm_get_frame (void) {
 		frame->page = NULL;
 
 		sema_down(&ft_access);
-		chk = hash_insert(&ft.ft_hash, &frame->elem);
+		list_push_back(&ft.ft_hash, &frame->elem);
 		sema_up(&ft_access);
-
+		/*
 		if(chk != NULL){
 			free(frame);
 			frame = hash_entry(chk, struct frame, elem);
-		}	
+		}	*/
 	}
 
 	ASSERT (frame != NULL);
