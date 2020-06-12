@@ -389,13 +389,11 @@ err:
 void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
-	if(spte->frame){
-		sema_down(&ft_access);
-		hash_delete(&ft, &spte->frame->elem);
-		sema_up(&ft_access);
-		free(spte->frame);
-	}
+	struct frame *frame = spte->frame;
+	
 	vm_dealloc_page(spte);
+	if(frame != NULL)
+		frame->page = NULL;
 }
 
 /* Free the resource hold by the supplemental page table */

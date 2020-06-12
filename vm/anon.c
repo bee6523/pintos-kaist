@@ -3,8 +3,10 @@
 #include "vm/vm.h"
 #include "devices/disk.h"
 #include "lib/kernel/bitmap.h"
+#include "lib/string.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/mmu.h"
 
 /* DO NOT MODIFY BELOW LINE */
 static struct disk *swap_disk;
@@ -19,7 +21,8 @@ static const struct page_operations anon_ops = {
 	.destroy = anon_destroy,
 	.type = VM_ANON,
 };
-
+//each page has 8 sectors
+#define NUM_SECTOR 8
 struct bitmap * swap_table;
 struct semaphore st_access;
 /* Initialize the data for anonymous pages */
@@ -39,6 +42,7 @@ anon_initializer (struct page *page, enum vm_type type, void *kva) {
 	
 	struct anon_page *anon_page = &page->anon;
 	anon_page->swap_idx = -1;
+	anon_page->swap_status = bitmap_create(NUM_SECTOR);
 	return true;
 }
 
@@ -52,14 +56,19 @@ anon_swap_in (struct page *page, void *kva) {
 		//return true;
 		return false;
 	}
-	if(anon_page->swap_idx % 8)/* swap index -1 means no swap disk allocatded.
-								   swap index should be multiple of 8
-								   because PGSIZE is 4096byte, sector size is 512
-								   */
+	/* 
+	   swap index -1 means no swap disk allocatded.
+	  swap index should be multiple of 8
+	  because PGSIZE is 4096byte, sector size is 512
+	*/
+	if(anon_page->swap_idx % NUM_SECTOR)								   
 		return false;
 	
 	for(i=0;i<8;i++){
-		disk_read(swap_disk, anon_page->swap_idx + i, kva + i*DISK_SECTOR_SIZE);
+		if(bitmap_test(anon_page->swap_status,i))
+			disk_read(swap_disk, anon_page->swap_idx + i, kva + i*DISK_SECTOR_SIZE);
+		else
+			memset(kva + i*DISK_SECTOR_SIZE,0, DISK_SECTOR_SIZE);
 	}
 	sema_down(&st_access);
 	bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
@@ -69,11 +78,10 @@ anon_swap_in (struct page *page, void *kva) {
 	anon_page->swap_idx = -1;	//now no allocation
 	return true;
 }
-/* check if page is zero page
+/* check if page is zero page */
 static bool
-is_zeropage(void * addr){
+is_zeros(void * addr, size_t size){
 	unsigned char *va = addr;
-	size_t size=PGSIZE;
 	ASSERT(va != NULL);
 	while(size-- > 0){
 		if( *va != 0)
@@ -82,7 +90,7 @@ is_zeropage(void * addr){
 	}
 	return true;
 }
-*/
+
 
 /* Swap out the page by writing contents to the swap disk. */
 static bool
@@ -98,8 +106,19 @@ anon_swap_out (struct page *page) {
 	sema_up(&st_access);
 	if(anon_page->swap_idx == BITMAP_ERROR)
 		PANIC("no available space at swap disk");
-	for(i=0;i<8;i++){
-		disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
+	if(pml4_is_dirty(page->pml4,page->va) || pml4_is_dirty(page->pml4,page->frame->kva)){	//if page is dirty, set swap status
+		for(i=0;i<8;i++){
+			if(!is_zeros(page->va+i*DISK_SECTOR_SIZE,DISK_SECTOR_SIZE)){
+				disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
+				bitmap_mark(anon_page->swap_status,i);//set bit in swap_status
+			}else
+				bitmap_reset(anon_page->swap_status,i);//set bit in swap_status
+		}		
+	}else{
+		for(i=0;i<8;i++){
+			if(bitmap_test(anon_page->swap_status,i))
+				disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
+		}
 	}
 	//printf("haha %d", *(int *)page->va);
 	return true;
@@ -114,4 +133,5 @@ anon_destroy (struct page *page) {
 		bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
 		sema_up(&st_access);
 	}
+	bitmap_destroy(anon_page->swap_status);
 }

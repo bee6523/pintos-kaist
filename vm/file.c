@@ -68,12 +68,12 @@ file_map_swap_out (struct page *page) {
 static void
 file_map_destroy (struct page *page) {
 	struct file_page *file_page = &page->file;
-	sema_down(&file_access);
 	if(is_dirty(page)){
+		sema_down(&file_access);
 		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
+		sema_up(&file_access);
 	}
 	file_close(file_page->file);
-	sema_up(&file_access);
 }
 
 

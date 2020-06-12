@@ -6,6 +6,7 @@ enum vm_type;
 
 struct anon_page {
 	size_t swap_idx;
+	struct bitmap *swap_status;
 };
 
 void vm_anon_init (void);
