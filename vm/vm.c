@@ -170,16 +170,17 @@ vm_get_victim (void) {
 	while(true){
 		ft.hand = list_next(ft.hand);
 		if(ft.hand==list_tail(&ft.ft_hash)){	//if last element of hash
-			ft.hand = list_head(&ft.ft_hash);	//goto first element and find again
-			continue;
+			ft.hand = list_begin(&ft.ft_hash);	//goto first element and find again
 		}
 		candidate = list_entry(ft.hand, struct frame, elem);
-		if(candidate->page == NULL)
-			return candidate;
 		if(is_frame_accessed(candidate)){
 			set_frame_accessed_zero(candidate);
-		}else
+		}else{
 			return candidate;
+		}
+		if(candidate->page == NULL){
+			return candidate;
+		}
 	}
 }
 

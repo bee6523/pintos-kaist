@@ -60,21 +60,21 @@ anon_swap_in (struct page *page, void *kva) {
 	   swap index -1 means no swap disk allocatded.
 	  swap index should be multiple of 8
 	  because PGSIZE is 4096byte, sector size is 512
-	*/
+	
 	if(anon_page->swap_idx % NUM_SECTOR)								   
 		return false;
-	
+	*/
 	for(i=0;i<8;i++){
 		if(bitmap_test(anon_page->swap_status,i))
 			disk_read(swap_disk, anon_page->swap_idx + i, kva + i*DISK_SECTOR_SIZE);
 		else
 			memset(kva + i*DISK_SECTOR_SIZE,0, DISK_SECTOR_SIZE);
 	}
-	sema_down(&st_access);
 	bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
-	sema_up(&st_access);
+	
 	pml4_set_accessed(page->pml4,kva,false);
 	pml4_set_dirty(page->pml4,kva,false);
+	
 	anon_page->swap_idx = -1;	//now no allocation
 	return true;
 }
@@ -120,7 +120,6 @@ anon_swap_out (struct page *page) {
 				disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
 		}
 	}
-	//printf("haha %d", *(int *)page->va);
 	return true;
 }
 
@@ -129,9 +128,7 @@ static void
 anon_destroy (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
 	if(anon_page->swap_idx != -1){	//if data is in swap disk, free them by changing swap table
-		sema_down(&st_access);
 		bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
-		sema_up(&st_access);
 	}
 	bitmap_destroy(anon_page->swap_status);
 }

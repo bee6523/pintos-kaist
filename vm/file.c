@@ -90,7 +90,7 @@ lazy_map_segment (struct page *page, void *aux) {
 	/* TODO: Load the segment from the file */
 	/* TODO: This called when the first page fault occurs on address VA. */
 	/* TODO: VA is available when calling this function. */
-	struct file_info *fi = (struct file_info *)aux;
+	struct file_page *fi = (struct file_page *)aux;
 	size_t page_read_bytes = fi->page_read_bytes;
 	size_t page_zero_bytes = PGSIZE - page_read_bytes;
 	uintptr_t kpage = page->frame->kva;
@@ -101,17 +101,18 @@ lazy_map_segment (struct page *page, void *aux) {
 		page_zero_bytes = PGSIZE - page_read_bytes;
 	}
 	sema_down(&file_access);
-	if (file_read_at (fi->file, kpage, page_read_bytes, fi->ofs) != (int)page_read_bytes) {
+	file_read_at(fi->file,kpage,page_read_bytes,fi->ofs);
+/*	if (file_read_at (fi->file, kpage, page_read_bytes, fi->ofs) != (int)page_read_bytes) {
 		printf("\nerror reading. check:%d, pg:%d\n",check,page_read_bytes);
 		sema_up(&file_access);
 		free(fi);
 		return false;
-	}
+	}*/
 	sema_up(&file_access);
 	memset(kpage + page_read_bytes, 0, page_zero_bytes);
-	page->file.file = fi->file;
+	page->file.file= fi->file;
 	page->file.ofs = fi->ofs;
-	page->file.page_read_bytes = page_read_bytes;
+	page->file.page_read_bytes = fi->page_read_bytes;
 	page->file.mmap_count = fi->mmap_count;
 	free(fi);
 	return true;
@@ -143,7 +144,7 @@ do_mmap (void *addr, size_t length, int writable,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		struct file_info *fi = (struct file_info *)malloc(sizeof(struct file_info));
+		struct file_page *fi = (struct file_page *)malloc(sizeof(struct file_page));
 		fi->file = reopen_file;
 		fi->ofs = offset + pgnum*PGSIZE;
 		fi->page_read_bytes = page_read_bytes;
@@ -182,9 +183,8 @@ do_munmap (void *addr) {
 			destroy(fp);
 			if(fp->frame){
 				fp->frame->page = NULL;
-				fp->frame = NULL;
+				pml4_clear_page(fp->pml4,fp->va);
 			}
-			pml4_clear_page(fp->pml4,fp->va);
 			spt_remove_page(spt, fp);
 			fp = spt_find_page(spt, addr + pgnum*PGSIZE);
 			pgnum++;

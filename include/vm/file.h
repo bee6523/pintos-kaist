@@ -12,12 +12,7 @@ struct file_page {
 	size_t page_read_bytes;
 	size_t *mmap_count;	//number of page that sharing file
 };
-struct file_info {
-	struct file * file;
-	uint32_t ofs;
-	size_t page_read_bytes;
-	size_t *mmap_count;
-};
+
 
 void vm_file_init (void);
 bool file_map_initializer (struct page *page, enum vm_type type, void *kva);
