@@ -42,6 +42,7 @@ void s_file_close(struct file *file){		//synchronized file closing provided for 
 	file_close(file);
 	sema_up(&file_access);
 }
+static bool isKernelAddrs(uint64_t uaddr, uint64_t size);
 static void validateBuffer(uint64_t uaddr, uint64_t size);
 static void validateAddress(uint64_t uaddr);
 static int allocate_fd(void);
@@ -299,8 +300,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax=NULL;
 				break;
 			}
-			if(container->file==NULL || file_length(container->file)==0 || f->R.rdi==0 || is_kernel_vaddr(f->R.rdi) ||
-				       	f->R.rsi == 0 || f->R.r8 > PGSIZE){	//it means this fd is for STDIO
+			if(container->file==NULL || file_length(container->file)==0 || f->R.rdi==0 || isKernelAddrs(f->R.rdi,f->R.rsi) ||
+				       	   f->R.rsi == 0 || f->R.r8 > PGSIZE){	//it means this fd is for STDIO
 				f->R.rax = NULL;
 				break;
 			}else{
@@ -321,6 +322,14 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			thread_exit();
 	}
 //	do_iret(f);
+}
+static bool isKernelAddrs(uint64_t uaddr, uint64_t size){
+	uint64_t i=0;
+	for(i=0;i<size;i++){
+		if(is_kernel_vaddr(uaddr+i))
+			return true;
+	}
+	return false;
 }
 
 static void validateBuffer(uint64_t uaddr, uint64_t size){

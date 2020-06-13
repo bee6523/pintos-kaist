@@ -2,6 +2,7 @@
 
 #include "vm/vm.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 
 static bool file_map_swap_in (struct page *page, void *kva);
 static bool file_map_swap_out (struct page *page);
@@ -73,7 +74,13 @@ file_map_destroy (struct page *page) {
 		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
 		sema_up(&file_access);
 	}
-	file_close(file_page->file);
+	(*file_page->mmap_count)--;
+	if((*file_page->mmap_count)==0){
+		sema_down(&file_access);
+		file_close(file_page->file);
+		sema_up(&file_access);
+		free(file_page->mmap_count);
+	}
 }
 
 
@@ -105,6 +112,7 @@ lazy_map_segment (struct page *page, void *aux) {
 	page->file.file = fi->file;
 	page->file.ofs = fi->ofs;
 	page->file.page_read_bytes = page_read_bytes;
+	page->file.mmap_count = fi->mmap_count;
 	free(fi);
 	return true;
 }
@@ -115,10 +123,18 @@ do_mmap (void *addr, size_t length, int writable,
 	ASSERT (pg_ofs (addr) == 0);
 	ASSERT (offset % PGSIZE == 0);
 	uint32_t pgnum = 0;
+	size_t *cnt = (size_t *)malloc(sizeof(size_t));
+	struct file *reopen_file;
 	enum vm_type type;
 	void * ret = addr;
 	if(file_length(file) < offset)
 		return NULL;
+
+
+	sema_down(&file_access);
+	reopen_file = file_reopen(file);
+	sema_up(&file_access);
+	*cnt = 0;
 	while (length > 0) {
 		/* Do calculate how to fill this page.
 		 * We will read PAGE_READ_BYTES bytes from FILE
@@ -128,11 +144,11 @@ do_mmap (void *addr, size_t length, int writable,
 
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
 		struct file_info *fi = (struct file_info *)malloc(sizeof(struct file_info));
-		sema_down(&file_access);
-		fi->file = file_reopen(file);
-		sema_up(&file_access);
+		fi->file = reopen_file;
 		fi->ofs = offset + pgnum*PGSIZE;
 		fi->page_read_bytes = page_read_bytes;
+		fi->mmap_count = cnt;
+		(*cnt)++;
 
 		if(page_read_bytes==length)
 			type = VM_FILE | F_LAST_PAGE;
