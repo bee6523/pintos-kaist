@@ -2,10 +2,13 @@
 
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/pte.h"
+#include "threads/mmu.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "vm/anon.h"
 #include "vm/file.h"
+#include "lib/string.h"
 
 struct frame_table ft;
 struct semaphore ft_access;
@@ -21,6 +24,16 @@ static bool spt_less_func(const struct hash_elem *a_, const struct hash_elem *b_
 	const struct page *b = hash_entry(b_, struct page, elem);
 
 	return a->va < b->va;
+}
+static unsigned pages_hash_func(const struct hash_elem *p_, void *aux UNUSED){
+	const struct page *p = hash_entry(p_, struct page, f_elem);
+	return hash_bytes(&p->tid, sizeof(p->tid));
+}
+static bool pages_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
+	const struct page *a = hash_entry(a_, struct page, f_elem);
+	const struct page *b = hash_entry(b_, struct page, f_elem);
+
+	return a->tid < b->tid;
 }
 /*
 static unsigned ft_hash_func(const struct hash_elem *p_, void *aux UNUSED){
@@ -104,8 +117,10 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 				PANIC("wrong vm_type");
 		}
 		page->pml4 = thread_current()->pml4;
+		page->tid = thread_current()->tid;
 		page->type = type;
 		page->writable = writable;
+		page->parent = NULL;
 		/* TODO: Insert the page into the spt. */
 		if(spt_insert_page(spt, page))
 			return true;
@@ -161,7 +176,7 @@ static bool is_frame_accessed(const struct frame *frame){
 	}
 	return false;
 }
-static void set_page_accessed_zero(struct hash_elem *e, void * aux){
+static void set_page_accessed_zero(struct hash_elem *e, void * aux UNUSED){
 	struct page * page = hash_entry(e,struct page, f_elem);
 	pml4_set_accessed(page->pml4,page->va,false);
 	pml4_set_accessed(page->pml4,page->frame->kva,false);
@@ -172,7 +187,7 @@ static struct frame *
 vm_get_victim (void) {
 	//struct frame *victim = NULL;
 	 /* TODO: The policy for eviction is up to you. */
-	/* policy : FIFO */
+	/* policy : clock algorithm */
 	struct frame * candidate;
 	while(true){
 		ft.hand = list_next(ft.hand);
@@ -191,12 +206,6 @@ vm_get_victim (void) {
 	}
 }
 
-static void clear_connection_from_page_to_frame(struct hash_elem *e, void *aux){
-	struct page * page = hash_entry(e,struct page, f_elem);
-	swap_out(page);
-	pml4_clear_page(page->pml4,page->va);
-	page->frame = NULL;
-}
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
@@ -207,7 +216,20 @@ vm_evict_frame (void) {
 	sema_up(&ft_access);
 	/* TODO: swap out the victim and return the evicted frame. */
 	if(!hash_empty(&victim->pages)){
-		hash_clear(&victim->pages, clear_connection_from_page_to_frame);
+		struct hash_iterator i;
+		hash_first(&i, &victim->pages);
+		struct page *parent = hash_entry(hash_next(&i),struct page, f_elem);
+		swap_out(parent);
+		parent->frame = NULL;
+		pml4_clear_page(parent->pml4,parent->va);
+		parent->parent = NULL;
+		while(hash_next(&i)){
+			struct page *cur = hash_entry(hash_cur(&i),struct page, f_elem);
+			cur->parent = parent;
+			pml4_clear_page(cur->pml4,cur->va);
+			cur->frame = NULL;
+		}
+		hash_clear(&victim->pages, NULL);
 	}
 	return victim;
 }
@@ -230,7 +252,7 @@ vm_get_frame (void) {
 			PANIC("todo?");
 		}
 		frame->kva = ppage;
-		hash_init(&frame->pages,spt_hash_func,spt_less_func,NULL);
+		hash_init(&frame->pages,pages_hash_func,pages_less_func,NULL);
 		frame->cow =false;
 
 
@@ -254,17 +276,38 @@ static void
 vm_stack_growth (void *addr) {
 	bool success = false;
 	void *stack_addr = (void *) ((uintptr_t)addr & ~(PGMASK));
-	if(!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_addr, true, NULL, NULL))
-		return false;
+	vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_addr, true, NULL, NULL);
 	success = vm_claim_page(stack_addr);
 	if(success){
-		memset(stack_addr,0,PGSIZE);
+		memset(stack_addr,-1,PGSIZE);
 	}
 }
 
 /* Handle the fault on write_protected page */
 static bool
-vm_handle_wp (struct page *page UNUSED) {
+vm_handle_wp (struct page *page) {
+	struct frame * parent = page->frame;
+	if(parent == NULL){	//if pages are swapped in
+		vm_do_claim_page(page);
+	}else{
+		if(hash_size(&parent->pages) == 1){
+			if(parent->cow){
+				pml4_set_writable(page->pml4,page->va,page->writable);
+				parent->cow = false;
+			}else{
+				return false;
+			}
+		}else{
+			struct frame *frame = vm_get_frame ();
+			/* Set links */
+			hash_delete(&parent->pages,&page->f_elem);
+			hash_insert(&frame->pages,&page->f_elem);
+			page->frame = frame;
+			page->parent = NULL;
+			pml4_update_page(page->pml4,page->va,frame->kva,page->writable);
+			memcpy(frame->kva,parent->kva,PGSIZE);
+		}
+	}
 	return true;
 }
 
@@ -295,15 +338,33 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 		}else{
 			return false;
 		}
-	}else if(page->frame != NULL){
-		//copy on write case.
-		if(page->writable && write){
-			//should check copy on write
-			return vm_handle_wp(page);
+	}else{
+	       	if(page->frame != NULL){
+			//copy on write case.
+			if(page->writable && write){
+				//should check copy on write
+				return vm_handle_wp(page);
+			}
+			return false; //otherwise should not happen
 		}
-		return false; //otherwise should not happen
+	
+		if(page->parent != NULL){
+			if(page->parent->frame == NULL){
+	//			printf("parentva: %x\n",page->parent->va);
+				if(!vm_do_claim_page(page->parent))
+				       	return false;
+			}
+			if(VM_TYPE(page->type) == VM_ANON)
+				pml4_set_writable(page->parent->pml4, page->parent->va,false);
+			page->frame = page->parent->frame;
+			page->parent = NULL;
+			hash_insert(&page->frame->pages, &page->f_elem);
+			pml4_set_page(page->pml4,page->va,page->frame->kva,false);
+			return true;
+		}else{
+			return vm_do_claim_page (page);
+		}
 	}
-	return vm_do_claim_page (page);
 }
 
 /* Free the page.
@@ -339,8 +400,9 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 	//printf("addr: %x %x %x\n", page->va,frame->kva,USER_STACK );
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
-	if(!pml4_set_page(page->pml4,page->va,frame->kva,page->writable))
+	if(!pml4_set_page(page->pml4,page->va,frame->kva,page->writable)){
 		return false;
+	}
 	return swap_in (page, frame->kva);
 }
 
@@ -382,30 +444,52 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 					PANIC("wrong vm_type");
 			}
 			page->pml4 = thread_current()->pml4;
+			page->tid = thread_current()->tid;
 			page->type = type;
 			page->writable = writable;
+			page->parent = spte;
 			if(!spt_insert_page(dst, page))
 				goto err;
-			if(!vm_do_claim_page(page))
-				goto err;
+
 			if(spte->frame == NULL && !vm_do_claim_page(spte))
-				goto err;
-			memcpy(page->frame->kva,spte->frame->kva,PGSIZE);
+				goto err;	
+	//		if(!vm_do_claim_page(page))
+	//			goto err;
+	//		memcpy(page->frame->kva, spte->frame->kva,PGSIZE);
+			page->frame = spte->frame;
+			page->frame->cow = true;
+			hash_insert(&spte->frame->pages, &page->f_elem);
+			switch(VM_TYPE(type)){
+				case VM_ANON:
+					pml4_set_page(page->pml4,page->va,page->frame->kva,false);
+					pml4_set_writable(spte->pml4,spte->va,false);
+					break;
+				case VM_FILE:
+					pml4_set_page(page->pml4,page->va,page->frame->kva,page->writable);
+					break;
+				default:
+					PANIC("wrong vm_type");
+			}
+			swap_in(page, page->frame->kva);
 		}
 	}
+
 	return true;
 err:	
 	printf("\n\nerror occured\n\n");
 	return false;
 }
 
-void
+static void
 free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
 	struct frame *frame = spte->frame;
+	uint64_t *pml4 = spte->pml4;
+	void *va = spte->va;
 	
-	if(frame != NULL)
+	if(frame != NULL){
 		hash_delete(&frame->pages,&spte->f_elem);
+	}
 	vm_dealloc_page(spte);
 }
 

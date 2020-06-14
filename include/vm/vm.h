@@ -46,7 +46,9 @@ struct page {
 	/* Your implementation */
 	struct hash_elem elem;
 	struct hash_elem f_elem;
-	uint64_t *pml4;
+	struct page *parent;
+	uint64_t *pml4;		//pml4 containing this page.
+	int tid;		//thread owning this page.
 	bool writable;
 	enum vm_type type;
 	/* Per-type data are binded into the union.

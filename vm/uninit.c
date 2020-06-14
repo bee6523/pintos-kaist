@@ -65,7 +65,7 @@ uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
 	/* TODO: Fill this function.
 	 * TODO: If you don't have anything to do, just return. */
-	if(uninit->type & VM_FILE){
+	if(uninit->type & VM_FILE && uninit->aux != NULL){
 		free(uninit->aux);
 	}
 }

@@ -54,7 +54,8 @@ anon_swap_in (struct page *page, void *kva) {
 	if(anon_page->swap_idx == -1){
 		//memset(kva,0,PGSIZE);		//if no swap disk allocated, can be considered as zero page. or maybe not
 		//return true;
-		return false;
+		printf("this case happens? %x %x\n",page->va,page->parent);
+		return true;
 	}
 	/* 
 	   swap index -1 means no swap disk allocatded.
@@ -108,8 +109,8 @@ anon_swap_out (struct page *page) {
 		PANIC("no available space at swap disk");
 	if(pml4_is_dirty(page->pml4,page->va) || pml4_is_dirty(page->pml4,page->frame->kva)){	//if page is dirty, set swap status
 		for(i=0;i<8;i++){
-			if(!is_zeros(page->va+i*DISK_SECTOR_SIZE,DISK_SECTOR_SIZE)){
-				disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
+			if(!is_zeros(page->frame->kva+i*DISK_SECTOR_SIZE,DISK_SECTOR_SIZE)){
+				disk_write(swap_disk,anon_page->swap_idx + i,page->frame->kva + i*DISK_SECTOR_SIZE);
 				bitmap_mark(anon_page->swap_status,i);//set bit in swap_status
 			}else
 				bitmap_reset(anon_page->swap_status,i);//set bit in swap_status
@@ -117,7 +118,7 @@ anon_swap_out (struct page *page) {
 	}else{
 		for(i=0;i<8;i++){
 			if(bitmap_test(anon_page->swap_status,i))
-				disk_write(swap_disk,anon_page->swap_idx + i,page->va + i*DISK_SECTOR_SIZE);
+				disk_write(swap_disk,anon_page->swap_idx + i,page->frame->kva + i*DISK_SECTOR_SIZE);
 		}
 	}
 	return true;
@@ -129,6 +130,8 @@ anon_destroy (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
 	if(anon_page->swap_idx != -1){	//if data is in swap disk, free them by changing swap table
 		bitmap_set_multiple(swap_table, anon_page->swap_idx, 8, false);
+	}else{
+		pml4_clear_page(page->pml4,page->va);
 	}
 	bitmap_destroy(anon_page->swap_status);
 }

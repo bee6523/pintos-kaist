@@ -81,6 +81,7 @@ file_map_destroy (struct page *page) {
 		sema_up(&file_access);
 		free(file_page->mmap_count);
 	}
+	pml4_clear_page(page->pml4,page->va);
 }
 
 

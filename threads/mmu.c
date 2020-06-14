@@ -191,7 +191,6 @@ pml4_destroy (uint64_t *pml4) {
 	if (pml4 == NULL)
 		return;
 	ASSERT (pml4 != base_pml4);
-
 	/* if PML4 (vaddr) >= 1, it's kernel space by define. */
 	uint64_t *pdpe = ptov ((uint64_t *) pml4[0]);
 	if (((uint64_t) pdpe) & PTE_P)
@@ -262,6 +261,37 @@ pml4_clear_page (uint64_t *pml4, void *upage) {
 	}
 }
 
+void
+pml4_set_writable(uint64_t *pml4, void *upage, bool writable){
+	uint64_t *pte;
+	ASSERT(pg_ofs(upage) ==0);
+	ASSERT(is_user_vaddr(upage));
+
+	pte = pml4e_walk(pml4, (uint64_t) upage, false);
+	if(pte != NULL){
+		if(writable)
+			*pte |= PTE_W;
+		else *pte &= ~(uint32_t) PTE_W;
+		if(rcr3()==vtop(pml4))
+			invlpg((uint64_t) upage);
+	}
+}
+bool
+pml4_update_page (uint64_t *pml4, void *upage, void *kpage, bool rw) {
+	ASSERT (pg_ofs (upage) == 0);
+	ASSERT (pg_ofs (kpage) == 0);
+	ASSERT (is_user_vaddr (upage));
+	ASSERT (pml4 != base_pml4);
+
+	uint64_t *pte = pml4e_walk (pml4, (uint64_t) upage, false);
+
+	if (pte){
+		*pte = vtop (kpage) | PTE_P | (rw ? PTE_W : 0) | PTE_U	;
+		if(rcr3()==vtop(pml4))
+			invlpg((uint64_t) upage);
+	}
+	return pte != NULL;
+}
 /* Returns true if the PTE for virtual page VPAGE in PML4 is dirty,
  * that is, if the page has been modified since the PTE was
  * installed.
