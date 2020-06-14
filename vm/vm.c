@@ -151,13 +151,20 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 /* helper function for vm_get_victim. 
    check if one of pages refering frame has accessed frame */
 static bool is_frame_accessed(const struct frame *frame){
-	uint64_t *pml4 = frame->page->pml4;
-	return (pml4_is_accessed(pml4,frame->kva) || pml4_is_accessed(pml4,frame->page->va));
+	struct hash_iterator i;
+	hash_first(&i, &frame->pages);
+	while(hash_next(&i)){
+		struct page *page = hash_entry(hash_cur(&i), struct page, f_elem);
+		if(pml4_is_accessed(page->pml4,page->frame->kva) || pml4_is_accessed(page->pml4,page->va)){
+			return true;
+		}
+	}
+	return false;
 }
-static void set_frame_accessed_zero(const struct frame *frame){
-	uint64_t *pml4 = frame->page->pml4;
-	pml4_set_accessed(pml4,frame->kva,false);
-	pml4_set_accessed(pml4,frame->page->va,false);
+static void set_page_accessed_zero(struct hash_elem *e, void * aux){
+	struct page * page = hash_entry(e,struct page, f_elem);
+	pml4_set_accessed(page->pml4,page->va,false);
+	pml4_set_accessed(page->pml4,page->frame->kva,false);
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -174,14 +181,21 @@ vm_get_victim (void) {
 		}
 		candidate = list_entry(ft.hand, struct frame, elem);
 		if(is_frame_accessed(candidate)){
-			set_frame_accessed_zero(candidate);
+			hash_apply(&candidate->pages,set_page_accessed_zero);
 		}else{
 			return candidate;
 		}
-		if(candidate->page == NULL){
+		if(hash_empty(&candidate->pages)){
 			return candidate;
 		}
 	}
+}
+
+static void clear_connection_from_page_to_frame(struct hash_elem *e, void *aux){
+	struct page * page = hash_entry(e,struct page, f_elem);
+	swap_out(page);
+	pml4_clear_page(page->pml4,page->va);
+	page->frame = NULL;
 }
 
 /* Evict one page and return the corresponding frame.
@@ -192,11 +206,8 @@ vm_evict_frame (void) {
 	struct frame *victim = vm_get_victim ();
 	sema_up(&ft_access);
 	/* TODO: swap out the victim and return the evicted frame. */
-	if(victim->page != NULL){
-		swap_out(victim->page);
-		pml4_clear_page(victim->page->pml4,victim->page->va);
-		victim->page->frame = NULL;
-		victim->page = NULL;
+	if(!hash_empty(&victim->pages)){
+		hash_clear(&victim->pages, clear_connection_from_page_to_frame);
 	}
 	return victim;
 }
@@ -219,7 +230,9 @@ vm_get_frame (void) {
 			PANIC("todo?");
 		}
 		frame->kva = ppage;
-		frame->page = NULL;
+		hash_init(&frame->pages,spt_hash_func,spt_less_func,NULL);
+		frame->cow =false;
+
 
 		sema_down(&ft_access);
 		list_push_back(&ft.ft_hash, &frame->elem);
@@ -232,7 +245,7 @@ vm_get_frame (void) {
 	}
 
 	ASSERT (frame != NULL);
-	ASSERT (frame->page == NULL);
+	ASSERT (hash_empty(&frame->pages));
 	return frame;
 }
 
@@ -322,7 +335,7 @@ static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
 	/* Set links */
-	frame->page = page;
+	hash_insert(&frame->pages,&page->f_elem);
 	page->frame = frame;
 	//printf("addr: %x %x %x\n", page->va,frame->kva,USER_STACK );
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
@@ -391,9 +404,9 @@ free_hash_element(struct hash_elem *element, void *aux UNUSED){
 	struct page *spte = hash_entry(element, struct page, elem);
 	struct frame *frame = spte->frame;
 	
-	vm_dealloc_page(spte);
 	if(frame != NULL)
-		frame->page = NULL;
+		hash_delete(&frame->pages,&spte->f_elem);
+	vm_dealloc_page(spte);
 }
 
 /* Free the resource hold by the supplemental page table */

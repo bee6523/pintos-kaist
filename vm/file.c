@@ -182,7 +182,7 @@ do_munmap (void *addr) {
 			}
 			destroy(fp);
 			if(fp->frame){
-				fp->frame->page = NULL;
+				hash_delete(&fp->frame->pages,&fp->f_elem);
 				pml4_clear_page(fp->pml4,fp->va);
 			}
 			spt_remove_page(spt, fp);

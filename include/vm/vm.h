@@ -45,6 +45,7 @@ struct page {
 
 	/* Your implementation */
 	struct hash_elem elem;
+	struct hash_elem f_elem;
 	uint64_t *pml4;
 	bool writable;
 	enum vm_type type;
@@ -63,7 +64,8 @@ struct page {
 /* The representation of "frame" */
 struct frame {
 	void *kva;
-	struct page *page;
+	struct hash pages;
+	bool cow;
 	struct list_elem elem;
 };
 
