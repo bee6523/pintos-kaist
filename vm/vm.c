@@ -10,7 +10,7 @@
 struct frame_table ft;
 struct semaphore ft_access;
 
-/* hash helper functions */
+/*  hash helper functions */
 
 static unsigned spt_hash_func(const struct hash_elem *p_, void *aux UNUSED){
 	const struct page *p = hash_entry(p_, struct page, elem);
