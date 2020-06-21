@@ -5,7 +5,7 @@ all::
 	@echo "Run 'make' in subdirectories: $(BUILD_SUBDIRS)."
 	@echo "This top-level make has only 'clean' targets."
 
-CLEAN_SUBDIRS = threads userprog vm 
+CLEAN_SUBDIRS = $(BUILD_SUBDIRS)
 
 clean::
 	for d in $(CLEAN_SUBDIRS); do $(MAKE) -C $$d $@; done
