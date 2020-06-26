@@ -153,11 +153,33 @@ fat_boot_create (void) {
 void
 fat_fs_init (void) {
 	/* TODO: Your code goes here. */
+	fat_fs->fat_length = fat_fs->bs.total_sectors / fat_fs->bs.sectors_per_cluster;
+	fat_fs->data_start = fat_fs->bs.fat_start+fat_fs->bs.fat_sectors-1;
 }
 
 /*----------------------------------------------------------------------------*/
 /* FAT handling                                                               */
 /*----------------------------------------------------------------------------*/
+
+//maybe make free_fat_inode_allocate? when sector_in_cluster isn't 1
+
+/* fat virsion of free_map_allocate.
+   Allocates CNT clusters from fat and make chain.
+   Returns true if successful.
+   */
+bool free_fat_allocate(size_t cnt, cluster_t *clst){
+	cluster_t cluster = fat_create_chain(0);
+	if(cluster != EOChain)
+		*clst = cluster;
+	while(cnt > 1){
+		cluster = fat_create_chain(cluster);
+		if(cluster == EOChain)
+			return false;
+		cnt--;
+	}
+	return clst != EOChain;
+}
+
 
 /* Add a cluster to the chain.
  * If CLST is 0, start a new chain.
@@ -165,6 +187,23 @@ fat_fs_init (void) {
 cluster_t
 fat_create_chain (cluster_t clst) {
 	/* TODO: Your code goes here. */
+	ASSERT(clst <= fat_fs->fat_length);
+	
+	cluster_t newcl;
+	for(newcl=2;newcl< fat_fs->fat_length;newcl++){	//find unallocated cluster
+		if(!fat_get(newcl))
+			break;
+
+	if(newcl>= fat_fs->fat_length){//fat is full
+		PANIC("fat_create_chain failed");
+		//return EOChain;
+	}
+	
+	fat_put(newcl, EOChain);
+	if(clst){
+		fat_put(clst,newcl);
+	}
+	return newcl;
 }
 
 /* Remove the chain of clusters starting from CLST.
@@ -172,22 +211,47 @@ fat_create_chain (cluster_t clst) {
 void
 fat_remove_chain (cluster_t clst, cluster_t pclst) {
 	/* TODO: Your code goes here. */
+	cluster_t hand=clst;
+	cluster_t tmp;
+	if(pclst)
+		fat_put(pclst, EOChain);
+	while(hand != EOChain){
+		tmp = fat_get(hand);
+		fat_put(hand,0);
+		hand = tmp;
+	}
+}
+
+/* Remove inode from FAT.
+   for sector input */
+void
+fat_remove_inode(disk_sector_t sector){
+	fat_put(sector/fat_fs->sectors_per_cluster,0);
 }
 
 /* Update a value in the FAT table. */
 void
 fat_put (cluster_t clst, cluster_t val) {
 	/* TODO: Your code goes here. */
+	ASSERT(clst <= fat_fs->fat_length);
+
+	*(((cluster_t *)fat_fs->fat)+clst) = val;
 }
 
 /* Fetch a value in the FAT table. */
 cluster_t
 fat_get (cluster_t clst) {
 	/* TODO: Your code goes here. */
+	ASSERT(clst <= fat_fs->fat_length);
+	
+	return *(((cluster_t *)fat_fs->fat)+clst)
 }
 
 /* Covert a cluster # to a sector number. */
 disk_sector_t
 cluster_to_sector (cluster_t clst) {
 	/* TODO: Your code goes here. */
+	ASSERT(clst <= fat_fs->fat_length);
+	
+	return clst*fat_fs->sectors_per_cluster;
 }

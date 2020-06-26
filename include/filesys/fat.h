@@ -24,9 +24,12 @@ void fat_close (void);
 void fat_create (void);
 void fat_close (void);
 
+bool free_fat_allocate(size_t cnt, cluster_t *clst);/* fat version of free_map_allcoate */
+
 cluster_t fat_create_chain (
     cluster_t clst /* Cluster # to stretch, 0: Create a new chain */
 );
+void fat_remove_inode(disk_sector_t sector);
 void fat_remove_chain (
     cluster_t clst, /* Cluster # to be removed */
     cluster_t pclst /* Previous cluster of clst, 0: clst is the start of chain */
