@@ -171,7 +171,7 @@ initd (void *f_name) {
 	list_init(&cont->fdl);			//allocate STDOUT
 	fdl->fd=1;
 	list_push_back(&cont->fdl,&fdl->elem);
-	cont->file==NULL;
+	cont->file=NULL;
 	cont->std=true;
 	list_push_back(&thread_current()->fd_list,&cont->elem);
 	if (process_exec (f_name) < 0)

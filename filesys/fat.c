@@ -177,7 +177,7 @@ bool free_fat_allocate(size_t cnt, cluster_t *clst){
 			return false;
 		cnt--;
 	}
-	return clst != EOChain;
+	return *clst != EOChain;
 }
 
 
@@ -190,9 +190,10 @@ fat_create_chain (cluster_t clst) {
 	ASSERT(clst <= fat_fs->fat_length);
 	
 	cluster_t newcl;
-	for(newcl=2;newcl< fat_fs->fat_length;newcl++){	//find unallocated cluster
+	for(newcl=fat_fs->bs.fat_start;newcl< fat_fs->fat_length;newcl++){	//find unallocated cluster
 		if(!fat_get(newcl))
 			break;
+	}
 
 	if(newcl>= fat_fs->fat_length){//fat is full
 		PANIC("fat_create_chain failed");
@@ -222,13 +223,6 @@ fat_remove_chain (cluster_t clst, cluster_t pclst) {
 	}
 }
 
-/* Remove inode from FAT.
-   for sector input */
-void
-fat_remove_inode(disk_sector_t sector){
-	fat_put(sector/fat_fs->sectors_per_cluster,0);
-}
-
 /* Update a value in the FAT table. */
 void
 fat_put (cluster_t clst, cluster_t val) {
@@ -244,7 +238,7 @@ fat_get (cluster_t clst) {
 	/* TODO: Your code goes here. */
 	ASSERT(clst <= fat_fs->fat_length);
 	
-	return *(((cluster_t *)fat_fs->fat)+clst)
+	return *(((cluster_t *)fat_fs->fat)+clst);
 }
 
 /* Covert a cluster # to a sector number. */
@@ -252,6 +246,5 @@ disk_sector_t
 cluster_to_sector (cluster_t clst) {
 	/* TODO: Your code goes here. */
 	ASSERT(clst <= fat_fs->fat_length);
-	
-	return clst*fat_fs->sectors_per_cluster;
+	return (clst*fat_fs->bs.sectors_per_cluster)+fat_fs->data_start;
 }
