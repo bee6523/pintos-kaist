@@ -94,7 +94,6 @@ lazy_map_segment (struct page *page, void *aux) {
 	size_t page_read_bytes = fi->page_read_bytes;
 	size_t page_zero_bytes = PGSIZE - page_read_bytes;
 	uintptr_t kpage = page->frame->kva;
-
 	size_t check = file_length(fi->file)-fi->ofs;
 	if( check < page_read_bytes){
 	       	page_read_bytes = check;

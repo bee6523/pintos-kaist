@@ -372,7 +372,6 @@ process_exec (void *f_name) {
 	/* We first kill the current context */
 	process_cleanup ();
 	/* And then load the binary */
-
 	success = load (file_name, &_if);
 
 	/* If load failed, quit. */

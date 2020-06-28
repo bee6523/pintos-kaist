@@ -28,6 +28,7 @@ enum vm_type {
 #include "vm/uninit.h"
 #include "vm/anon.h"
 #include "vm/file.h"
+#include "threads/synch.h"
 #ifdef EFILESYS
 #include "filesys/page_cache.h"
 #endif
@@ -47,7 +48,9 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+	struct lock pglock;
 	struct hash_elem elem;
+	struct list_elem list_elem;	//only used for page_cache
 	uint64_t *pml4;
 	bool writable;
 	enum vm_type type;

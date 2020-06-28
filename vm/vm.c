@@ -1,7 +1,9 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
+#include <hash.h>
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/mmu.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "vm/anon.h"
@@ -41,7 +43,7 @@ vm_init (void) {
 	vm_anon_init ();
 	vm_file_init ();
 #ifdef EFILESYS  /* For project 4 */
-	pagecache_init ();
+	page_cache_init ();
 #endif
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
@@ -103,6 +105,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 			default:
 				PANIC("wrong vm_type");
 		}
+		lock_init(&page->pglock);
 		page->pml4 = thread_current()->pml4;
 		page->type = type;
 		page->writable = writable;

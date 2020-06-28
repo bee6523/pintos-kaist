@@ -245,6 +245,6 @@ fat_get (cluster_t clst) {
 disk_sector_t
 cluster_to_sector (cluster_t clst) {
 	/* TODO: Your code goes here. */
-	ASSERT(clst <= fat_fs->fat_length);
+	ASSERT(clst < fat_fs->fat_length);
 	return (clst*fat_fs->bs.sectors_per_cluster)+fat_fs->data_start;
 }
