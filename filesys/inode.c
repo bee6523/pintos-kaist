@@ -70,7 +70,6 @@ byte_to_cluster (struct inode *inode, off_t pos, bool create) {
 				static char zeros[DISK_SECTOR_SIZE];
 				clst = fat_create_chain(tmp);
 				disk_write(filesys_disk, cluster_to_sector(clst),zeros);
-				inode->data.length += DISK_SECTOR_SIZE;
 			}
 		}
 		return clst;	
@@ -213,7 +212,6 @@ inode_close (struct inode *inode) {
 				lock_acquire(&sectors_hash_lock);
 
 				page = inode_hash_find(cluster_idx);
-				
 				hash_delete(&open_inode_sectors, &page->elem);
 				lock_acquire(&cache_lock);
 				if(page->page_cache.enqueued){
@@ -222,8 +220,8 @@ inode_close (struct inode *inode) {
 				if(page->page_cache.cache_idx != -1){
 					lock_acquire(&page->pglock);
 					swap_out(page);
-					lock_release(&page->pglock);
 					alloc_pages[page->page_cache.cache_idx] = NULL;
+					lock_release(&page->pglock);
 				}
 				
 				lock_release(&cache_lock);
@@ -265,7 +263,6 @@ inode_hash_find(cluster_t clst){
 		page_cache_initializer(page, VM_PAGE_CACHE, NULL);
 		lock_init(&page->pglock);
 		page->type = VM_PAGE_CACHE;
-		page->page_cache.cluster_idx = (clst & (~0x7));
 		page->va = (clst & (~0x7));
 		e = hash_insert(&open_inode_sectors, &page->elem);
 		if(e != NULL){
@@ -309,30 +306,30 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset) {
 		lock_acquire(&sectors_hash_lock);
 		page = inode_hash_find(cluster_idx);
 		lock_release(&sectors_hash_lock);
-
-		lock_acquire(&page->pglock);
+		
+		lock_acquire(&cache_lock);
 		if(page->page_cache.cache_idx == -1){
 
-			lock_acquire(&cache_lock);
 			if(!page->page_cache.enqueued){
 				page->page_cache.enqueued = true;
-				list_push_front(&swapin_queue,&page->list_elem);
+				list_push_back(&swapin_queue,&page->list_elem);
 			}
 			cond_signal(&not_empty, &cache_lock);
-			while(page->page_cache.cache_idx == -1){
+			while(page->page_cache.cache_idx <= -1){
 				cond_wait(&job_done, &cache_lock);
 			}
-
+	//		printf("%p %d",page->page_cache.kva, page->page_cache.cache_idx);
 			nxt_idx = fat_get(cluster_idx);
 			if(nxt_idx != EOChain){
 				nxt_sector_page = inode_hash_find(nxt_idx);//read ahead
 				if(!nxt_sector_page->page_cache.enqueued){
 					nxt_sector_page->page_cache.enqueued = true;
-					list_push_front(&swapin_queue,&nxt_sector_page->list_elem);
+					list_push_back(&swapin_queue,&nxt_sector_page->list_elem);
 				}
 			}
-			lock_release(&cache_lock);
 		}
+		lock_acquire(&page->pglock);
+		lock_release(&cache_lock);
 		page_ofs = cluster_idx & 0x7;
 		memcpy(buffer + bytes_read, page->page_cache.kva+page_ofs*DISK_SECTOR_SIZE+sector_ofs,chunk_size); 
 		page->page_cache.is_accessed = true;
@@ -377,17 +374,16 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 	struct page * page;
 	char page_ofs;
 	cluster_t tmp;
-
 	if (inode->deny_write_cnt)
 		return 0;
 	cluster_t cluster_idx = byte_to_cluster (inode, offset,true);
 	int sector_ofs = offset % DISK_SECTOR_SIZE;
 	//off_t inode_left = inode_length (inode) - offset;
-	
+	if(size+offset > inode->data.length)
+		inode->data.length = size+offset;
 	while (size > 0) {
 		if(cluster_idx == EOChain){
 			cluster_idx = fat_create_chain(tmp);
-			inode->data.length += DISK_SECTOR_SIZE;
 		}
 
 		/* Sector to write, starting byte offset within sector. */
@@ -406,9 +402,8 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 		page = inode_hash_find(cluster_idx);
 		lock_release(&sectors_hash_lock);
 
-		lock_acquire(&page->pglock);
+		lock_acquire(&cache_lock);
 		if(page->page_cache.cache_idx == -1){
-			lock_acquire(&cache_lock);
 			if(!page->page_cache.enqueued){
 				page->page_cache.enqueued = true;
 				list_push_front(&swapin_queue,&page->list_elem);
@@ -418,14 +413,14 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 				cond_wait(&job_done, &cache_lock);
 			//no read ahead	
 		
-			lock_release(&cache_lock);
 		}
+		lock_acquire(&page->pglock);
+		lock_release(&cache_lock);
 		page_ofs = cluster_idx & 0x7;
 		memcpy(page->page_cache.kva + page_ofs*DISK_SECTOR_SIZE + sector_ofs,buffer+bytes_written, chunk_size);
 		bitmap_set(page->page_cache.swap_status, page_ofs, true);//set dirty bit
 		page->page_cache.is_accessed = true;
 		lock_release(&page->pglock);
-
 		/* Advance. */
 		size -= chunk_size;
 	//	inode_left -= chunk_size;

@@ -38,9 +38,9 @@ void syscall_handler (struct intr_frame *);
 struct semaphore file_access;
 
 void s_file_close(struct file *file){		//synchronized file closing provided for process_exit()
-	sema_down(&file_access);
+//	sema_down(&file_access);
 	file_close(file);
-	sema_up(&file_access);
+//	sema_up(&file_access);
 }
 static bool isKernelAddrs(uint64_t uaddr, uint64_t size);
 static void validateBuffer(uint64_t uaddr, uint64_t size);

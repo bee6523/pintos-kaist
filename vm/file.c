@@ -1,6 +1,8 @@
 /* file.c: Implementation of memory mapped file object (mmaped object). */
 
+#include <string.h>
 #include "vm/vm.h"
+#include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
 
@@ -69,16 +71,13 @@ file_map_swap_out (struct page *page) {
 static void
 file_map_destroy (struct page *page) {
 	struct file_page *file_page = &page->file;
-	if(is_dirty(page)){
-		sema_down(&file_access);
-		file_write_at(file_page->file, page->va,file_page->page_read_bytes, file_page->ofs);
-		sema_up(&file_access);
-	}
+	swap_out(page);
 	(*file_page->mmap_count)--;
 	if((*file_page->mmap_count)==0){
 		sema_down(&file_access);
 		file_close(file_page->file);
 		sema_up(&file_access);
+
 		free(file_page->mmap_count);
 	}
 }

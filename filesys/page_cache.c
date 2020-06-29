@@ -2,6 +2,7 @@
 
 #include "vm/vm.h"
 #include "devices/disk.h"
+#include "devices/timer.h"
 #include "lib/kernel/bitmap.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
@@ -12,6 +13,7 @@ static bool page_cache_readahead (struct page *page, void *kva);
 static bool page_cache_writeback (struct page *page);
 static void page_cache_destroy (struct page *page);
 static void page_cache_kworkerd (void *aux);
+static void regular_writeback_worker (void *aux);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations page_cache_op = {
@@ -22,7 +24,7 @@ static const struct page_operations page_cache_op = {
 };
 
 tid_t page_cache_workerd;
-tid_t write_back_timer;
+tid_t writeback_worker;
 void * page_cache_kpage;
 struct page *alloc_pages[8];//pages in cache
 
@@ -45,6 +47,7 @@ page_cache_init (void) {
 	cond_init(&job_done);
 	
 	page_cache_workerd = thread_create("pcache_worker",PRI_DEFAULT,page_cache_kworkerd,NULL);
+	writeback_worker = thread_create("writeback_worker",PRI_DEFAULT, regular_writeback_worker,NULL);
 }
 
 /* Initialize the page cache */
@@ -73,7 +76,7 @@ page_cache_readahead (struct page *page, void *kva) {
 	lock_release(&cache_lock);
 	*/
 	struct page_cache *pcache = &page->page_cache;
-	disk_sector_t sector = cluster_to_sector(pcache->cluster_idx);
+	disk_sector_t sector = cluster_to_sector(page->va);
 
 	for(int i=0;i<8;i++){
 		if(sector+i < disk_size(filesys_disk))
@@ -88,7 +91,7 @@ page_cache_readahead (struct page *page, void *kva) {
 static bool
 page_cache_writeback (struct page *page) {
 	struct page_cache *pcache = &page->page_cache;
-	disk_sector_t sector = cluster_to_sector(pcache->cluster_idx);
+	disk_sector_t sector = cluster_to_sector(page->va);
 	for(int i=0;i<8;i++){
 		if(bitmap_test(pcache->swap_status,i)){
 			disk_write(filesys_disk, sector+i,pcache->kva + i*DISK_SECTOR_SIZE);
@@ -113,7 +116,7 @@ page_cache_destroy (struct page *page) {
 
 /* Worker thread for page cache */
 static void
-page_cache_kworkerd (void *aux) {
+page_cache_kworkerd (void *aux UNUSED) {
 	struct list_elem *e;
 	struct page *page;
 	struct page_cache *pcache;
@@ -153,10 +156,26 @@ page_cache_kworkerd (void *aux) {
 		alloc_pages[i] = page;
 		pcache->cache_idx = i;
 		pcache->kva = (void *)((char *)page_cache_kpage+(i*PGSIZE));
+		pcache->is_accessed = true;
 		i++;
 		if(i>=8) i=0;
 		swap_in(page,pcache->kva);//read data from disk to cache
 		cond_broadcast(&job_done,&cache_lock);
+		lock_release(&cache_lock);
+	}
+}
+static void
+regular_writeback_worker (void *aux UNUSED){
+	struct page *page;
+	int i=0;
+	while(1){
+		timer_sleep(100);
+		lock_acquire(&cache_lock);
+		for(i=0;i<8;i++){
+			if(alloc_pages[i] != NULL){
+				swap_out(alloc_pages[i]);
+			}
+		}
 		lock_release(&cache_lock);
 	}
 }

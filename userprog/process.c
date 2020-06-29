@@ -98,7 +98,6 @@ process_init (void) {
 	current->num_fd=2;
 	list_init(&current->child_list);
 	list_init(&current->fd_list);
-	
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -424,13 +423,16 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
+	process_cleanup ();
 	if(list_begin(&curr->fd_list) != NULL){
 		while(!list_empty(&curr->fd_list)){
 			struct fd_cont *cont=list_entry(list_pop_front(&curr->fd_list), struct fd_cont,elem);
 			while(!list_empty(&cont->fdl)){
 				free(list_entry(list_pop_front(&cont->fdl),struct fd_list,elem));
 			}
+			sema_down(&file_access);
 			file_close(cont->file);
+			sema_up(&file_access);
 			free(cont);
 		}
 	}
@@ -448,7 +450,6 @@ process_exit (void) {
 		sema_up(&pipe->sema);
 		printf("%s: exit(%d)\n",curr->name, pipe->exit_status);
 	}
-	process_cleanup ();
 }
 
 /* Free the current process's resources. */

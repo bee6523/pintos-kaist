@@ -7,7 +7,7 @@ struct page;
 enum vm_type;
 
 struct page_cache {
-	cluster_t cluster_idx;
+	//cluster_t cluster_idx;
 	char cache_idx;	//-1 if not allocated
 	void *kva;
 	bool enqueued; //check if page is inside work queue
