@@ -43,12 +43,12 @@ struct inode {
 
 static unsigned inode_hash_func(const struct hash_elem *p_, void *aux UNUSED){
 	const struct page *p = hash_entry(p_, struct page, elem);
-	return hash_bytes(&p->page_cache.cluster_idx, sizeof(&p->page_cache.cluster_idx));
+	return hash_bytes(&p->va, sizeof(&p->va));
 }
 static bool inode_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
 	const struct page *a = hash_entry(a_, struct page, elem);
 	const struct page *b = hash_entry(b_, struct page, elem);
-	return a->page_cache.cluster_idx < b->page_cache.cluster_idx;
+	return a->va < b->va;
 }
 
 /* Returns the disk sector that contains byte offset POS within
@@ -82,16 +82,20 @@ byte_to_cluster (struct inode *inode, off_t pos, bool create) {
  * returns the same `struct inode'. */
 static struct list open_inodes;
 static struct hash open_inode_sectors;
+static struct lock sectors_hash_lock;
 extern struct list swapin_queue;
 extern struct lock cache_lock;
 extern struct condition not_empty;
 extern struct condition job_done;
+extern struct page *alloc_pages[8];
+static struct page *inode_hash_find(cluster_t clst);
 
 /* Initializes the inode module. */
 void
 inode_init (void) {
 	list_init (&open_inodes);
 	hash_init(&open_inode_sectors, inode_hash_func, inode_less_func,NULL);
+	lock_init(&sectors_hash_lock);
 }
 
 /* Initializes an inode with LENGTH bytes of data and
@@ -186,6 +190,8 @@ inode_get_inumber (const struct inode *inode) {
  * If INODE was also a removed inode, frees its blocks. */
 void
 inode_close (struct inode *inode) {
+	cluster_t cluster_idx;
+	struct page * page;
 	/* Ignore null pointer. */
 	if (inode == NULL)
 		return;
@@ -194,11 +200,41 @@ inode_close (struct inode *inode) {
 	if (--inode->open_cnt == 0) {
 		/* Remove from inode list and release lock. */
 		list_remove (&inode->elem);
+		
 
 		/* Deallocate blocks if removed. */
 		if (inode->removed) {
 			fat_remove_chain (inode->cluster,0);
 			fat_remove_chain (inode->data.start,0); 
+		}else{	/* if not removed, writeback to disk */
+			//update disk, free allocated cache page
+			cluster_idx = inode->data.start;
+			while(cluster_idx != EOChain){
+				lock_acquire(&sectors_hash_lock);
+
+				page = inode_hash_find(cluster_idx);
+				
+				hash_delete(&open_inode_sectors, &page->elem);
+				lock_acquire(&cache_lock);
+				if(page->page_cache.enqueued){
+					list_remove(&page->list_elem);
+				}
+				if(page->page_cache.cache_idx != -1){
+					lock_acquire(&page->pglock);
+					swap_out(page);
+					lock_release(&page->pglock);
+					alloc_pages[page->page_cache.cache_idx] = NULL;
+				}
+				
+				lock_release(&cache_lock);
+				lock_release(&sectors_hash_lock);
+
+				cluster_idx = fat_get(cluster_idx);
+				free(page);
+			}
+					
+
+			disk_write(filesys_disk, cluster_to_sector(inode->cluster),&inode->data);//update inode data
 		}
 
 		free (inode); 
@@ -220,8 +256,8 @@ inode_hash_find(cluster_t clst){
 	struct page temp;
 	struct hash_elem *e;
 	page_cache_initializer(&temp, VM_PAGE_CACHE, NULL);
-	temp.page_cache.cluster_idx = (clst & (~0x7));
-
+	temp.va = (clst & (~0x7));
+	
 	e = hash_find(&open_inode_sectors, &temp.elem);
 	if(e == NULL){	//if no page allocated for sector, allocate one
 		page = (struct page *)malloc(sizeof(struct page));
@@ -230,6 +266,7 @@ inode_hash_find(cluster_t clst){
 		lock_init(&page->pglock);
 		page->type = VM_PAGE_CACHE;
 		page->page_cache.cluster_idx = (clst & (~0x7));
+		page->va = (clst & (~0x7));
 		e = hash_insert(&open_inode_sectors, &page->elem);
 		if(e != NULL){
 			free(page);
@@ -269,28 +306,37 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset) {
 		int chunk_size = size < min_left ? size : min_left;
 		if (chunk_size <= 0)
 			break;
+		lock_acquire(&sectors_hash_lock);
 		page = inode_hash_find(cluster_idx);
-		lock_acquire(&cache_lock);
+		lock_release(&sectors_hash_lock);
+
 		lock_acquire(&page->pglock);
 		if(page->page_cache.cache_idx == -1){
-			list_push_front(&swapin_queue,&page->list_elem);
+
+			lock_acquire(&cache_lock);
+			if(!page->page_cache.enqueued){
+				page->page_cache.enqueued = true;
+				list_push_front(&swapin_queue,&page->list_elem);
+			}
 			cond_signal(&not_empty, &cache_lock);
-			while(page->page_cache.cache_idx == -1)
+			while(page->page_cache.cache_idx == -1){
 				cond_wait(&job_done, &cache_lock);
+			}
 
 			nxt_idx = fat_get(cluster_idx);
 			if(nxt_idx != EOChain){
 				nxt_sector_page = inode_hash_find(nxt_idx);//read ahead
-				list_push_front(&swapin_queue,&nxt_sector_page->list_elem);
+				if(!nxt_sector_page->page_cache.enqueued){
+					nxt_sector_page->page_cache.enqueued = true;
+					list_push_front(&swapin_queue,&nxt_sector_page->list_elem);
+				}
 			}
-		
+			lock_release(&cache_lock);
 		}
 		page_ofs = cluster_idx & 0x7;
-		printf("%p %p %d\n",page->page_cache.kva, buffer, cluster_idx);
 		memcpy(buffer + bytes_read, page->page_cache.kva+page_ofs*DISK_SECTOR_SIZE+sector_ofs,chunk_size); 
 		page->page_cache.is_accessed = true;
 		lock_release(&page->pglock);
-		lock_release(&cache_lock);
 		/* Advance. */
 		size -= chunk_size;
 		inode_left -= chunk_size;
@@ -356,13 +402,19 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 		int chunk_size = size < sector_left ? size : sector_left;
 		if (chunk_size <= 0)
 			break;
+		lock_acquire(&sectors_hash_lock);
 		page = inode_hash_find(cluster_idx);
+		lock_release(&sectors_hash_lock);
+
 		lock_acquire(&page->pglock);
-		if(page->page_cache.kva == NULL){
+		if(page->page_cache.cache_idx == -1){
 			lock_acquire(&cache_lock);
-			list_push_front(&swapin_queue,&page->list_elem);
+			if(!page->page_cache.enqueued){
+				page->page_cache.enqueued = true;
+				list_push_front(&swapin_queue,&page->list_elem);
+			}
 			cond_signal(&not_empty, &cache_lock);
-			while(page->page_cache.kva == NULL)
+			while(page->page_cache.cache_idx == -1)
 				cond_wait(&job_done, &cache_lock);
 			//no read ahead	
 		

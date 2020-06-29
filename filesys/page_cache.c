@@ -54,6 +54,7 @@ page_cache_initializer (struct page *page, enum vm_type type, void *kva) {
 	struct page_cache *pcache = &page->page_cache;
 	page->operations = &page_cache_op;
 	pcache->cache_idx = -1;
+	pcache->enqueued = false;
 	pcache->swap_status = bitmap_create(8);
 	return true;
 }
@@ -126,6 +127,7 @@ page_cache_kworkerd (void *aux) {
 		e = list_pop_front(&swapin_queue);
 		page = list_entry(e, struct page,list_elem);
 		pcache = &page->page_cache;
+		pcache->enqueued = false;
 		if(pcache->cache_idx != -1){
 			cond_signal(&job_done, &cache_lock);
 			lock_release(&cache_lock);

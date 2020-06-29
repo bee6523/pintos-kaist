@@ -10,6 +10,7 @@ struct page_cache {
 	cluster_t cluster_idx;
 	char cache_idx;	//-1 if not allocated
 	void *kva;
+	bool enqueued; //check if page is inside work queue
 	bool is_accessed;
 	struct bitmap *swap_status;
 };
