@@ -25,8 +25,7 @@ static const struct page_operations page_cache_op = {
 
 tid_t page_cache_workerd;
 tid_t writeback_worker;
-void * page_cache_kpage;
-struct page *alloc_pages[8];//pages in cache
+struct page alloc_pages[8];//pages  cache
 
 struct list swapin_queue;
 struct lock cache_lock;
@@ -39,7 +38,11 @@ struct condition job_done;
 void
 page_cache_init (void) {
 	/* TODO: Create a worker daemon for page cache with page_cache_kworkerd */
-	page_cache_kpage = palloc_get_multiple(PAL_USER,8);
+	for(int i=0;i<8;i++){
+		lock_init(&alloc_pages[i].pglock);
+		alloc_pages[i].type = VM_PAGE_CACHE;
+		page_cache_initializer(&alloc_pages[i], VM_PAGE_CACHE,palloc_get_page(0));
+	}
 	
 	list_init(&swapin_queue);
 	lock_init(&cache_lock);
@@ -56,8 +59,8 @@ page_cache_initializer (struct page *page, enum vm_type type, void *kva) {
 	/* Set up the handler */
 	struct page_cache *pcache = &page->page_cache;
 	page->operations = &page_cache_op;
-	pcache->cache_idx = -1;
-	pcache->enqueued = false;
+	page->va = kva;
+	pcache->cluster_idx = EOChain;
 	pcache->swap_status = bitmap_create(8);
 	return true;
 }
@@ -76,11 +79,10 @@ page_cache_readahead (struct page *page, void *kva) {
 	lock_release(&cache_lock);
 	*/
 	struct page_cache *pcache = &page->page_cache;
-	disk_sector_t sector = cluster_to_sector(page->va);
-
+	disk_sector_t sector = cluster_to_sector(pcache->cluster_idx);
 	for(int i=0;i<8;i++){
 		if(sector+i < disk_size(filesys_disk))
-			disk_read(filesys_disk,sector+i,pcache->kva+i*DISK_SECTOR_SIZE);
+			disk_read(filesys_disk,sector+i,page->va+i*DISK_SECTOR_SIZE);
 	}
 	pcache->is_accessed = false;
 	bitmap_set_all(pcache->swap_status,false);
@@ -91,10 +93,10 @@ page_cache_readahead (struct page *page, void *kva) {
 static bool
 page_cache_writeback (struct page *page) {
 	struct page_cache *pcache = &page->page_cache;
-	disk_sector_t sector = cluster_to_sector(page->va);
+	disk_sector_t sector = cluster_to_sector(pcache->cluster_idx);
 	for(int i=0;i<8;i++){
 		if(bitmap_test(pcache->swap_status,i)){
-			disk_write(filesys_disk, sector+i,pcache->kva + i*DISK_SECTOR_SIZE);
+			disk_write(filesys_disk, sector+i,page->va + i*DISK_SECTOR_SIZE);
 			bitmap_set(pcache->swap_status,i,false);
 		}
 	}
@@ -106,9 +108,8 @@ static void
 page_cache_destroy (struct page *page) {
 	struct page_cache *pcache = &page->page_cache;
 	lock_acquire(&cache_lock);
-	if(pcache->cache_idx != -1){
+	if(pcache->cluster_idx != EOChain){
 		swap_out(page);
-		alloc_pages[pcache->cache_idx]=NULL;
 	}
 	lock_release(&cache_lock);
 	bitmap_destroy(pcache->swap_status);
@@ -128,39 +129,23 @@ page_cache_kworkerd (void *aux UNUSED) {
 		}
 		//swapin page.
 		e = list_pop_front(&swapin_queue);
-		page = list_entry(e, struct page,list_elem);
-		pcache = &page->page_cache;
-		pcache->enqueued = false;
-		if(pcache->cache_idx != -1){
+		pcache = list_entry(e, struct page_cache,elem);
+		if(page_cache_find(pcache->cluster_idx)){
 			cond_signal(&job_done, &cache_lock);
 			lock_release(&cache_lock);
 			continue;
 		}
 
-		while(alloc_pages[i] != NULL){		//eviction - clock algorithm
-			if(alloc_pages[i]->page_cache.is_accessed){
-				alloc_pages[i]->page_cache.is_accessed = false;
-				i++;
-				if(i>=8) i=0;
-				continue;
-			}else{
-				lock_acquire(&alloc_pages[i]->pglock);
-				swap_out(alloc_pages[i]);	//remove page from cache
-				alloc_pages[i]->page_cache.kva = 0;
-				alloc_pages[i]->page_cache.cache_idx = -1;
-				lock_release(&alloc_pages[i]->pglock);
-				alloc_pages[i]=NULL;
-				break;
-			}
-		}
-		alloc_pages[i] = page;
-		pcache->cache_idx = i;
-		pcache->kva = (void *)((char *)page_cache_kpage+(i*PGSIZE));
-		pcache->is_accessed = true;
-		i++;
-		if(i>=8) i=0;
-		swap_in(page,pcache->kva);//read data from disk to cache
-		cond_broadcast(&job_done,&cache_lock);
+		page = pcache_evict_cache();
+
+		page->page_cache.cluster_idx = pcache->cluster_idx & (~0x7);
+		swap_in(page,page->va);
+	//	pcache->kva = (void *)((char *)page_cache_kpage+(i*PGSIZE));
+		if(pcache->is_accessed)
+			free(pcache);
+	//	i++;
+	//	if(i>=8) i=0;
+	//	cond_broadcast(&job_done,&cache_lock);
 		lock_release(&cache_lock);
 	}
 }
@@ -169,13 +154,44 @@ regular_writeback_worker (void *aux UNUSED){
 	struct page *page;
 	int i=0;
 	while(1){
-		timer_sleep(100);
+		timer_sleep(3000);
 		lock_acquire(&cache_lock);
 		for(i=0;i<8;i++){
-			if(alloc_pages[i] != NULL){
-				swap_out(alloc_pages[i]);
+			if(alloc_pages[i].page_cache.cluster_idx != EOChain){
+				swap_out(&alloc_pages[i]);
 			}
 		}
 		lock_release(&cache_lock);
 	}
+}
+int i=0;
+struct page * pcache_evict_cache(void){
+	int tmp;
+	while(alloc_pages[i].page_cache.cluster_idx != EOChain){	//eviction - clock algorithm
+		if(alloc_pages[i].page_cache.is_accessed){
+			alloc_pages[i].page_cache.is_accessed = false;
+			i++;
+			if(i>=8) i=0;
+			continue;
+		}else{
+			lock_acquire(&alloc_pages[i].pglock);
+			swap_out(&alloc_pages[i]);	//remove page from cache
+			alloc_pages[i].page_cache.cluster_idx = EOChain;
+			lock_release(&alloc_pages[i].pglock);
+			break;
+		}
+	}
+	tmp=i;
+	i++;
+	if(i>=8) i=0;
+	return &alloc_pages[tmp];
+}
+
+struct page * page_cache_find(cluster_t clst){
+	cluster_t align = clst & (~0x7);
+	for(int i=0;i<8;i++){
+		if(alloc_pages[i].page_cache.cluster_idx == align)
+			return &alloc_pages[i];
+	}
+	return NULL;
 }

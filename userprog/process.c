@@ -443,7 +443,9 @@ process_exit (void) {
 		}
 	}
 	if(curr->exec_file != NULL){
+		sema_down(&file_access);
 		file_close(curr->exec_file);
+		sema_up(&file_access);
 	}
 	if(curr->parent_pipe != NULL){
 		struct child_pipe *pipe=list_entry(curr->parent_pipe,struct child_pipe, elem);
