@@ -4,6 +4,7 @@
 #include <list.h>
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "filesys/fat.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
@@ -195,7 +196,7 @@ dir_remove (struct dir *dir, const char *name) {
 
 	/* Open inode. */
 	inode = inode_open (e.inode_sector);
-	if (inode == NULL)
+	if (inode == NULL || inode_get_inumber(inode)==ROOT_DIR_CLUSTER)
 		goto done;
 	
 	/*check directory entry if directory */
@@ -203,9 +204,12 @@ dir_remove (struct dir *dir, const char *name) {
 		tmp_dir = dir_open(inode);
 		if(tmp_dir != NULL){
 			while(inode_read_at(tmp_dir->inode, &tmp, sizeof tmp, tmp_dir->pos)==sizeof tmp){
-				tmp_dir->pos += sizeof e;
-				if(e.in_use)
-					goto done;
+				tmp_dir->pos += sizeof tmp;
+				if(tmp.in_use){
+					if(strcmp(tmp.name, ".") && strcmp(tmp.name, "..")){
+						goto done;
+					}
+				}
 			}
 		}
 	}
@@ -235,6 +239,8 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1]) {
 	while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) {
 		dir->pos += sizeof e;
 		if (e.in_use) {
+			if(!strcmp(e.name, ".") || !strcmp(e.name, ".."))
+				continue;
 			strlcpy (name, e.name, NAME_MAX + 1);
 			return true;
 		}
@@ -248,27 +254,76 @@ dir_search_dir(struct dir *cur_dir, const char *name, struct inode ** dir_inode,
 	struct dir *dir;
 	struct inode *inode;
 	char *n_copy = palloc_get_page(0);
-	char *token, *save_ptr;
+	char sym_tmp[NAME_MAX+1];
+	char *start, *token, *save_ptr, *symlink;
+	bool success;
 	if(n_copy == NULL){
 		PANIC("page allocation fail in dir_search_dir");
 	}
 	strlcpy(n_copy, name,PGSIZE);
-	if(n_copy[0]=='/' || cur_dir == NULL)
+	if(strlen(n_copy)==0)
+		return false;
+	if(n_copy[0]=='/'){
 		dir = dir_open_root();	//absolute path
-	else
-		dir = dir_reopen(cur_dir);	//relative path
-
-	for(token = strtok_r(n_copy,"/",&save_ptr); token != NULL; 
+		start = &n_copy[1];
+	}else{
+		start = n_copy;
+		if(cur_dir == NULL){
+			dir=dir_open_root();
+		}else
+			dir = dir_reopen(cur_dir);	//relative path
+	}
+	if(inode_removed(dir->inode))
+		goto search_err;
+	for(token = strtok_r(start,"/",&save_ptr); token != NULL; 
 			token=strtok_r(NULL, "/", &save_ptr)){
+search_sym:
 		if(dir_lookup(dir, token, &inode)){
 			if(inode_type(inode) == INODE_DIR){
-				dir_close(dir);
-				dir_open(inode);
-				continue;
+				if(inode_removed(inode))
+					goto search_err;
+				if(*save_ptr == '\0'){
+					if(strlen(token) > NAME_MAX)
+						goto search_err;
+					strlcpy(file_name,token,NAME_MAX+1);
+					*dir_inode = dir->inode;
+					free(dir);
+					palloc_free_page(n_copy);
+					return true;
+				}else{
+					dir_close(dir);
+					dir_open(inode);
+					continue;
+				}
+			}else if(inode_type(inode)==INODE_SYMLINK){
+				symlink = palloc_get_page(0);
+				inode_read_at(inode,symlink,PGSIZE,0);
+				if(*save_ptr == '\0'){
+					if(strlen(token) > NAME_MAX)
+						goto search_err;
+					strlcpy(file_name,token, NAME_MAX+1);
+					*dir_inode = dir->inode;
+					free(dir);
+					palloc_free_page(n_copy);
+					palloc_free_page(symlink);
+					return true;
+				}else{
+					if(dir_search_dir(dir, symlink, &inode,sym_tmp)){
+						palloc_free_page(symlink);
+						token = sym_tmp;
+						goto search_sym;
+					}else{
+						palloc_free_page(symlink);
+						palloc_free_page(n_copy);
+						dir_close(dir);
+						return false;
+					}
+				}
+
 			}else{
 				if(strtok_r(NULL, "/", &save_ptr) == NULL){
-					if(strlen(name) > NAME_MAX)
-						break;
+					if(strlen(token) > NAME_MAX)
+						goto search_err;
 					strlcpy(file_name,token, NAME_MAX+1);
 					*dir_inode = dir->inode;
 					free(dir);
@@ -282,8 +337,8 @@ dir_search_dir(struct dir *cur_dir, const char *name, struct inode ** dir_inode,
 			}
 		}else{
 			if(strtok_r(NULL, "/", &save_ptr) == NULL){
-				if(strlen(name) > NAME_MAX)
-					break;
+				if(strlen(token) > NAME_MAX)
+					goto search_err;
 				strlcpy(file_name,token, NAME_MAX+1);
 				*dir_inode = dir->inode;
 				free(dir);
@@ -296,6 +351,12 @@ dir_search_dir(struct dir *cur_dir, const char *name, struct inode ** dir_inode,
 			}
 		}
 	}
+	strlcpy(file_name,".",NAME_MAX+1);
+	*dir_inode = dir->inode;
+	free(dir);
+	palloc_free_page(n_copy);
+	return true;
+search_err:
 	dir_close(dir);
 	palloc_free_page(n_copy);
 	return false;

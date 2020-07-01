@@ -14,6 +14,8 @@
 #include "userprog/process.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/directory.h"
+#include "filesys/inode.h"
 #include "lib/string.h"
 #include "intrinsic.h"
 #include "vm/vm.h"
@@ -157,6 +159,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				list_init(&container->fdl);
 				fdl->fd=fd;
 				list_push_back(&container->fdl,&fdl->elem);
+				if(inode_type(file_get_inode(file))==INODE_DIR)
+					container->dir = dir_open(file_get_inode(file));
 				container->file=file;
 				list_push_back(&cur->fd_list,&container->elem);
 				f->R.rax=fd;
@@ -164,7 +168,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_FILESIZE:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL || container->file == NULL){
+			if(container==NULL || container->file == NULL || (inode_type(file_get_inode(container->file)) == INODE_DIR)){
 				f->R.rax=0;
 				break;
 			}
@@ -187,6 +191,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 					f->R.rax=f->R.rdx;
 				}else f->R.rax=-1;	//error if STDOUT
 			}else{
+				if((inode_type(file_get_inode(container->file)) == INODE_DIR)){
+					f->R.rax=-1;
+					break;
+				}
 				struct page * pg;
 				if((pg = spt_find_page(&cur->spt,f->R.rsi)) == NULL){
 					if(!(f->R.rsi > f->rsp-8 && f->R.rsi < USER_STACK))	//if not stack grow case, exit
@@ -217,6 +225,11 @@ syscall_handler (struct intr_frame *f UNUSED) {
 					f->R.rax=f->R.rdx;
 				}else f->R.rax=-1;
 			}else{
+				if((inode_type(file_get_inode(container->file)) == INODE_DIR)){
+					f->R.rax=-1;
+					break;
+				}
+
 				sema_down(&file_access);
 				f->R.rax = file_write(container->file, f->R.rsi,f->R.rdx);
 				sema_up(&file_access);
@@ -224,7 +237,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_SEEK:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL || container->file==NULL)
+			if(container==NULL || container->file==NULL || (inode_type(file_get_inode(container->file)) == INODE_DIR))
 				break;
 			sema_down(&file_access);
 			file_seek(container->file,f->R.rsi);
@@ -232,7 +245,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_TELL:
 			container=get_cont_by_fd(cur,f->R.rdi);
-			if(container==NULL || container->file==NULL){
+			if(container==NULL || container->file==NULL || inode_type(file_get_inode(container->file)) == INODE_DIR) {
 				f->R.rax=-1;
 				break;
 			}
@@ -250,6 +263,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			list_remove(fdl);
 			free(list_entry(fdl,struct fd_list,elem));
 			if(list_empty(&container->fdl)){
+				if(inode_type(file_get_inode(container->file))==INODE_DIR)
+					free(container->dir);
 				sema_down(&file_access);
 				file_close(container->file);
 				sema_up(&file_access);
@@ -300,7 +315,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax=NULL;
 				break;
 			}
-			if(container->file==NULL ||  file_length(container->file)==0 || f->R.rdi==0 || isKernelAddrs(f->R.rdi,f->R.rsi) ||
+			if(container->file==NULL || (inode_type(file_get_inode(container->file)) == INODE_DIR) || file_length(container->file)==0 || f->R.rdi==0 || isKernelAddrs(f->R.rdi,f->R.rsi) ||
 				       	   f->R.rsi == 0 || f->R.r8 > PGSIZE){	//it means this fd is for STDIO
 				f->R.rax = NULL;
 				break;
@@ -317,7 +332,57 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			validateAddress(f->R.rdi);
 			do_munmap(f->R.rdi);
 			break;
+		case SYS_CHDIR:
+			validateAddress(f->R.rdi);
+			sema_down(&file_access);
+			f->R.rax = filesys_chdir((char *)f->R.rdi);
+			sema_up(&file_access);
+			break;
+		case SYS_MKDIR:
+			validateAddress(f->R.rdi);
+			sema_down(&file_access);
+			f->R.rax = filesys_mkdir((char *)f->R.rdi);
+			sema_up(&file_access);
+			break;
+		case SYS_READDIR:
+			validateBuffer(f->R.rsi,NAME_MAX+1);
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=false;
+				break;
+			}
+			if(inode_type(file_get_inode(container->file)) != INODE_DIR){
+				f->R.rax=false;
+				break;
+			}
+			if(container->dir != NULL){
+				f->R.rax = dir_readdir(container->dir, f->R.rsi);
+			}else f->R.rax = false;
+			break;
+		case SYS_ISDIR:
+			container=get_cont_by_fd(cur,f->R.rdi);
+			if(container==NULL){
+				f->R.rax=false;
+				break;
+			}
+			f->R.rax = (inode_type(file_get_inode(container->file)) == INODE_DIR);
+			break;
+		case SYS_INUMBER:
+			container = get_cont_by_fd(cur, f->R.rdi);
+			if(container==NULL){
+				f->R.rax=-1;
+				break;
+			}
+			f->R.rax = inode_get_inumber(file_get_inode(container->file));
+			break;
+		case SYS_SYMLINK:
+			validateAddress(f->R.rdi);
+			validateAddress(f->R.rsi);
+			sema_down(&file_access);
+			f->R.rax = filesys_symlink((char *)f->R.rdi, (char *)f->R.rsi);
+			sema_up(&file_access);
 
+			break;
 		default:
 			thread_exit();
 	}

@@ -38,6 +38,7 @@ struct child_pipe {			/* used for fork and wait. */
 struct fd_cont {			/* now in extra credit, one file description can have */
 	struct list fdl;		/* multiple file descriptor. so I used list to control it */
 	struct file * file;
+	struct dir *dir;
 	bool std;			//STDOUT if true, STDIN if false. only set when STDIO, checked when file is NULL
 	struct list_elem elem;
 };

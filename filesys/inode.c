@@ -21,9 +21,8 @@ struct inode_disk {
 	cluster_t start;                /* First data cluster. */
 	off_t length;                       /* File size in bytes. */
 	enum inode_type type;
-	char symlink[16];
 	unsigned magic;                     /* Magic number. */
-	uint32_t unused[120];               /* Not used. */
+	uint32_t unused[124];               /* Not used. */
 };
 
 /* Returns the number of sectors to allocate for an inode SIZE
@@ -43,15 +42,6 @@ struct inode {
 	struct inode_disk data;             /* Inode content. */
 };
 
-static unsigned inode_hash_func(const struct hash_elem *p_, void *aux UNUSED){
-	const struct page *p = hash_entry(p_, struct page, elem);
-	return hash_bytes(&p->va, sizeof(&p->va));
-}
-static bool inode_less_func(const struct hash_elem *a_, const struct hash_elem *b_, void * aux UNUSED){
-	const struct page *a = hash_entry(a_, struct page, elem);
-	const struct page *b = hash_entry(b_, struct page, elem);
-	return a->va < b->va;
-}
 
 /* Returns the disk sector that contains byte offset POS within
  * INODE.
@@ -71,6 +61,7 @@ byte_to_cluster (struct inode *inode, off_t pos, bool create) {
 			if(clst==EOChain){
 				static char zeros[DISK_SECTOR_SIZE];
 				clst = fat_create_chain(tmp);
+				if(clst==0) return EOChain;
 				disk_write(filesys_disk, cluster_to_sector(clst),zeros);
 			}
 		}
@@ -82,19 +73,25 @@ byte_to_cluster (struct inode *inode, off_t pos, bool create) {
 /* List of open inodes, so that opening a single inode twice
  * returns the same `struct inode'. */
 static struct list open_inodes;
-static struct hash open_inode_sectors;
 extern struct list swapin_queue;
 extern struct lock cache_lock;
 extern struct condition not_empty;
 extern struct condition job_done;
 extern struct page *alloc_pages[8];
-static struct page *inode_hash_find(cluster_t clst);
 
 /* Initializes the inode module. */
 void
 inode_init (void) {
 	list_init (&open_inodes);
-	hash_init(&open_inode_sectors, inode_hash_func, inode_less_func,NULL);
+}
+
+void
+inode_done(void){
+	struct inode *inode;
+	while(!list_empty(&open_inodes)){
+		inode = list_entry(list_pop_front(&open_inodes),struct inode,elem);
+		inode_close(inode);
+	}
 }
 
 /* Initializes an inode with LENGTH bytes of data and
@@ -134,6 +131,7 @@ inode_create (cluster_t cluster, off_t length, enum inode_type type) {
 	}
 	return success;
 }
+
 
 /* Reads an inode from SECTOR
  * and returns a `struct inode' that contains it.
@@ -206,8 +204,8 @@ inode_close (struct inode *inode) {
 		if (inode->removed) {
 			fat_remove_chain (inode->cluster,0);
 			fat_remove_chain (inode->data.start,0); 
-		}else{	/* if not removed, writeback to disk */
-			//update disk, free allocated cache page
+		}else{
+			/* writeback to disk */
 			cluster_idx = inode->data.start;
 			while(cluster_idx != EOChain){
 				lock_acquire(&cache_lock);
@@ -220,14 +218,10 @@ inode_close (struct inode *inode) {
 				}
 				
 				lock_release(&cache_lock);
-
 				cluster_idx = fat_get(cluster_idx);
-			}
-					
-
+			}			
 			disk_write(filesys_disk, cluster_to_sector(inode->cluster),&inode->data);//update inode data
 		}
-
 		free (inode); 
 	}
 }
@@ -450,6 +444,11 @@ inode_allow_write (struct inode *inode) {
 off_t
 inode_length (const struct inode *inode) {
 	return inode->data.length;
+}
+
+bool
+inode_removed(const struct inode *inode){
+	return inode->removed;
 }
 
 enum inode_type

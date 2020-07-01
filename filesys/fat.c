@@ -153,7 +153,7 @@ fat_boot_create (void) {
 void
 fat_fs_init (void) {
 	/* TODO: Your code goes here. */
-	fat_fs->fat_length = fat_fs->bs.total_sectors / fat_fs->bs.sectors_per_cluster;
+	fat_fs->fat_length = (fat_fs->bs.total_sectors / fat_fs->bs.sectors_per_cluster) - fat_fs->bs.fat_sectors;
 	fat_fs->data_start = fat_fs->bs.fat_start+fat_fs->bs.fat_sectors-1;
 }
 
@@ -169,11 +169,12 @@ fat_fs_init (void) {
    */
 bool free_fat_allocate(size_t cnt, cluster_t *clst){
 	cluster_t cluster = fat_create_chain(0);
-	if(cluster != EOChain)
+	if(cluster != 0)
 		*clst = cluster;
+	else return false;
 	while(cnt > 1){
 		cluster = fat_create_chain(cluster);
-		if(cluster == EOChain)
+		if(cluster == 0)
 			return false;
 		cnt--;
 	}
@@ -196,8 +197,7 @@ fat_create_chain (cluster_t clst) {
 	}
 
 	if(newcl>= fat_fs->fat_length){//fat is full
-		PANIC("fat_create_chain failed");
-		//return EOChain;
+		return 0;
 	}
 	
 	fat_put(newcl, EOChain);

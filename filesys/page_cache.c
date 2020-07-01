@@ -52,7 +52,12 @@ page_cache_init (void) {
 	page_cache_workerd = thread_create("pcache_worker",PRI_DEFAULT,page_cache_kworkerd,NULL);
 	writeback_worker = thread_create("writeback_worker",PRI_DEFAULT, regular_writeback_worker,NULL);
 }
-
+void
+page_cache_close(void){
+	for(int i=0;i<8;i++){
+		destroy(&alloc_pages[i]);
+	}
+}
 /* Initialize the page cache */
 bool
 page_cache_initializer (struct page *page, enum vm_type type, void *kva) {

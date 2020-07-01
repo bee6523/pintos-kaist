@@ -14,6 +14,7 @@ struct page_cache {
 };
 
 void page_cache_init (void);
+void page_cache_close(void);
 bool page_cache_initializer (struct page *page, enum vm_type type, void *kva);
 struct page * page_cache_find(cluster_t clst);
 struct page * pcache_evict_cache(void);
