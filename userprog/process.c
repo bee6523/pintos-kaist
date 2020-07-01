@@ -142,6 +142,8 @@ initd (void *f_name) {
 	thread_current()->parent_pipe = &init_process.elem;
 	process_init ();
 	
+	thread_current()->cur_dir = dir_open_root();
+
 	//allocate fd 0, 1 to STDIN, STDOUT
 	struct fd_cont *cont=(struct fd_cont *)malloc(sizeof(struct fd_cont));
 	if(cont==NULL) PANIC("Fail to launch initd\n");
@@ -150,6 +152,7 @@ initd (void *f_name) {
 		free(cont);
 	       	PANIC("Fail to launch initd\n");
 	}
+
 	list_init(&cont->fdl);			//allocate STDIN
 	fdl->fd=0;
 	list_push_back(&cont->fdl,&fdl->elem);
@@ -284,6 +287,7 @@ __do_fork (void *aux) {
 	 * TODO:       the resources of parent.*/
 
 	if_.R.rax=0;		//return value of child should be 0
+	current->cur_dir = dir_reopen(parent->cur_dir);
 	
 	struct child_pipe *pipe=list_entry(list_back(&parent->child_list),struct child_pipe,elem);
 	ASSERT(pipe->tid==0);

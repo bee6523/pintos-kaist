@@ -133,7 +133,9 @@ struct thread {
 	int recent_cpu;
 	int nice;
 	struct list_elem ent_e;
-
+	
+	//used for filesystem
+	struct dir *cur_dir;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */

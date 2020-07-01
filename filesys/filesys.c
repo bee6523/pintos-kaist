@@ -7,6 +7,7 @@
 #include "filesys/fat.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "vm/vm.h"
 #include "devices/disk.h"
 
 /* The disk that contains the file system. */
@@ -25,6 +26,7 @@ filesys_init (bool format) {
 	inode_init ();
 
 #ifdef EFILESYS
+	page_cache_init();
 	fat_init ();
 
 	if (format)
@@ -61,11 +63,18 @@ filesys_done (void) {
 bool
 filesys_create (const char *name, off_t initial_size) {
 	cluster_t inode_cluster = 0;
-	struct dir *dir = dir_open_root ();
+	struct dir *dir;
+	struct inode *inode = NULL;
+	char file_name[NAME_MAX+1];
+
+	if(dir_search_dir(thread_current()->cur_dir, name, &inode, file_name)){
+		dir = dir_open(inode);
+	}else return false;
+
 	bool success = (dir != NULL
 			&& free_fat_allocate (1, &inode_cluster)
-			&& inode_create (inode_cluster, initial_size)
-			&& dir_add (dir, name, inode_cluster));
+			&& inode_create (inode_cluster, initial_size, INODE_FILE)
+			&& dir_add (dir, file_name, inode_cluster));
 	if (!success && inode_cluster != 0)
 		fat_remove_chain (inode_cluster,0);
 	dir_close (dir);
@@ -80,10 +89,27 @@ filesys_create (const char *name, off_t initial_size) {
  * or if an internal memory allocation fails. */
 struct file *
 filesys_open (const char *name) {
-	struct dir *dir = dir_open_root ();
+	struct dir *dir;
 	struct inode *inode = NULL;
+	char file_name[NAME_MAX+1];
+	if(dir_search_dir(thread_current()->cur_dir, name, &inode, &file_name)){
+		dir = dir_open(inode);
+	}else return NULL;
+	
 	if (dir != NULL)
-		dir_lookup (dir, name, &inode);
+		dir_lookup (dir, file_name, &inode);
+	
+	if( inode != NULL &&inode_type(inode) == INODE_SYMLINK){
+		if(dir_search_dir(dir, name, &inode, &file_name)){
+			dir_close(dir);
+			dir = dir_open(inode);
+			inode = NULL;
+			if(dir != NULL)
+				dir_lookup(dir, file_name, &inode);
+			dir_close(dir);
+		}else return NULL;
+	}
+	
 	dir_close (dir);
 	return file_open (inode);
 }
@@ -94,8 +120,14 @@ filesys_open (const char *name) {
  * or if an internal memory allocation fails. */
 bool
 filesys_remove (const char *name) {
-	struct dir *dir = dir_open_root ();
-	bool success = dir != NULL && dir_remove (dir, name);
+	struct dir *dir;
+	struct inode *inode = NULL;
+	char file_name[NAME_MAX+1];
+	if(dir_search_dir(thread_current()->cur_dir, name, &inode, &file_name)){
+		dir = dir_open(inode);
+	}else return false;
+
+	bool success = dir != NULL && dir_remove (dir, file_name);
 	dir_close (dir);
 
 	return success;
@@ -109,7 +141,7 @@ do_format (void) {
 #ifdef EFILESYS
 	/* Create FAT and save it to the disk. */
 	fat_create ();
-	if (!dir_create (ROOT_DIR_SECTOR, 16))
+	if (!dir_create (ROOT_DIR_SECTOR, 16, 0))
 		PANIC ("root directory creation failed");
 	fat_close ();
 #else

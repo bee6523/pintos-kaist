@@ -300,7 +300,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				f->R.rax=NULL;
 				break;
 			}
-			if(container->file==NULL || file_length(container->file)==0 || f->R.rdi==0 || isKernelAddrs(f->R.rdi,f->R.rsi) ||
+			if(container->file==NULL ||  file_length(container->file)==0 || f->R.rdi==0 || isKernelAddrs(f->R.rdi,f->R.rsi) ||
 				       	   f->R.rsi == 0 || f->R.r8 > PGSIZE){	//it means this fd is for STDIO
 				f->R.rax = NULL;
 				break;

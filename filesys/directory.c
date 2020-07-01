@@ -5,6 +5,8 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
+#include "threads/vaddr.h"
 
 /* A directory. */
 struct dir {
@@ -22,8 +24,19 @@ struct dir_entry {
 /* Creates a directory with space for ENTRY_CNT entries in the
  * given SECTOR.  Returns true if successful, false on failure. */
 bool
-dir_create (disk_sector_t sector, size_t entry_cnt) {
-	return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+dir_create (disk_sector_t sector, size_t entry_cnt, disk_sector_t parent_sector) {
+	bool succ;
+	struct dir *dir;
+	succ =  inode_create (sector, entry_cnt * sizeof (struct dir_entry), INODE_DIR);
+	dir = dir_open(inode_open(sector));
+	succ = succ && dir_add(dir, ".", sector);
+	if(parent_sector != 0){
+		succ = succ && dir_add(dir, "..", parent_sector);
+	}else{
+		succ = succ && dir_add(dir, "..", sector);
+	}
+	dir_close(dir);
+	return succ;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -109,9 +122,9 @@ dir_lookup (const struct dir *dir, const char *name,
 	ASSERT (dir != NULL);
 	ASSERT (name != NULL);
 
-	if (lookup (dir, name, &e, NULL))
+	if (lookup (dir, name, &e, NULL)){
 		*inode = inode_open (e.inode_sector);
-	else
+	}else
 		*inode = NULL;
 
 	return *inode != NULL;
@@ -167,8 +180,9 @@ done:
  * which occurs only if there is no file with the given NAME. */
 bool
 dir_remove (struct dir *dir, const char *name) {
-	struct dir_entry e;
+	struct dir_entry e,tmp;
 	struct inode *inode = NULL;
+	struct dir *tmp_dir = NULL;
 	bool success = false;
 	off_t ofs;
 
@@ -183,6 +197,19 @@ dir_remove (struct dir *dir, const char *name) {
 	inode = inode_open (e.inode_sector);
 	if (inode == NULL)
 		goto done;
+	
+	/*check directory entry if directory */
+	if(inode_type(inode) == INODE_DIR){
+		tmp_dir = dir_open(inode);
+		if(tmp_dir != NULL){
+			while(inode_read_at(tmp_dir->inode, &tmp, sizeof tmp, tmp_dir->pos)==sizeof tmp){
+				tmp_dir->pos += sizeof e;
+				if(e.in_use)
+					goto done;
+			}
+		}
+	}
+
 
 	/* Erase directory entry. */
 	e.in_use = false;
@@ -212,5 +239,64 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1]) {
 			return true;
 		}
 	}
+	return false;
+}
+
+/* caller must close inode */
+bool
+dir_search_dir(struct dir *cur_dir, const char *name, struct inode ** dir_inode, char file_name[NAME_MAX + 1]){
+	struct dir *dir;
+	struct inode *inode;
+	char *n_copy = palloc_get_page(0);
+	char *token, *save_ptr;
+	if(n_copy == NULL){
+		PANIC("page allocation fail in dir_search_dir");
+	}
+	strlcpy(n_copy, name,PGSIZE);
+	if(n_copy[0]=='/' || cur_dir == NULL)
+		dir = dir_open_root();	//absolute path
+	else
+		dir = dir_reopen(cur_dir);	//relative path
+
+	for(token = strtok_r(n_copy,"/",&save_ptr); token != NULL; 
+			token=strtok_r(NULL, "/", &save_ptr)){
+		if(dir_lookup(dir, token, &inode)){
+			if(inode_type(inode) == INODE_DIR){
+				dir_close(dir);
+				dir_open(inode);
+				continue;
+			}else{
+				if(strtok_r(NULL, "/", &save_ptr) == NULL){
+					if(strlen(name) > NAME_MAX)
+						break;
+					strlcpy(file_name,token, NAME_MAX+1);
+					*dir_inode = dir->inode;
+					free(dir);
+					palloc_free_page(n_copy);
+					return true;
+				}else{
+					dir_close(dir);
+					palloc_free_page(n_copy);
+					return false;
+				}
+			}
+		}else{
+			if(strtok_r(NULL, "/", &save_ptr) == NULL){
+				if(strlen(name) > NAME_MAX)
+					break;
+				strlcpy(file_name,token, NAME_MAX+1);
+				*dir_inode = dir->inode;
+				free(dir);
+				palloc_free_page(n_copy);
+				return true;
+			}else{
+				dir_close(dir);
+				palloc_free_page(n_copy);
+				return false;
+			}
+		}
+	}
+	dir_close(dir);
+	palloc_free_page(n_copy);
 	return false;
 }
