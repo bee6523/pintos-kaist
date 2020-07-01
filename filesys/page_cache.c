@@ -101,6 +101,7 @@ page_cache_writeback (struct page *page) {
 	disk_sector_t sector = cluster_to_sector(pcache->cluster_idx);
 	for(int i=0;i<8;i++){
 		if(bitmap_test(pcache->swap_status,i)){
+	//		printf("writeback %d\n",sector+i);
 			disk_write(filesys_disk, sector+i,page->va + i*DISK_SECTOR_SIZE);
 			bitmap_set(pcache->swap_status,i,false);
 		}

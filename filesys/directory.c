@@ -170,6 +170,7 @@ dir_add (struct dir *dir, const char *name, disk_sector_t inode_sector) {
 	e.in_use = true;
 	strlcpy (e.name, name, sizeof e.name);
 	e.inode_sector = inode_sector;
+//	printf("dir add %d\n",inode_sector);
 	success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
 
 done:

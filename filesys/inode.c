@@ -90,6 +90,7 @@ inode_done(void){
 	struct inode *inode;
 	while(!list_empty(&open_inodes)){
 		inode = list_entry(list_pop_front(&open_inodes),struct inode,elem);
+		inode->open_cnt=1;
 		inode_close(inode);
 	}
 }
@@ -140,7 +141,7 @@ struct inode *
 inode_open (cluster_t cluster) {
 	struct list_elem *e;
 	struct inode *inode;
-
+//	printf("inode %d open\n",cluster);
 	disk_sector_t sector = cluster_to_sector(cluster);
 
 	/* Check whether this inode is already open. */
@@ -219,7 +220,8 @@ inode_close (struct inode *inode) {
 				
 				lock_release(&cache_lock);
 				cluster_idx = fat_get(cluster_idx);
-			}			
+			}	
+//			printf("inode %d close\n",inode->cluster);	
 			disk_write(filesys_disk, cluster_to_sector(inode->cluster),&inode->data);//update inode data
 		}
 		free (inode); 
